@@ -5,6 +5,7 @@ import datetime as _dt
 import json
 import os
 from dataclasses import dataclass, field, fields
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -42,7 +43,13 @@ class Style:
             p = LUT_DIR / p
         if not p.exists():
             raise FileNotFoundError(f"LUT not found: {p}  (run: python -m cake build-luts)")
-        return read_cube(p)
+        return _read_cube_cached(str(p), p.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=32)
+def _read_cube_cached(path: str, _mtime: int) -> np.ndarray:
+    """Parsing a 33^3 .cube text file takes ~150 ms; the UI switches styles interactively."""
+    return read_cube(path)
 
 
 def list_styles() -> list[Style]:
@@ -97,10 +104,15 @@ def render_stamp(style: Style, w: int, h: int, video_path: str | None = None) ->
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     tw, th = draw.textbbox((0, 0), text, font=font)[2:]
-    # Defaults keep the stamp inside the Douyin / Channels safe area (~840x1280 centred-high on
-    # 1080x1920): clear of the right-hand button column and the bottom caption block.
-    mx = int(spec.get("margin_x", 0.17) * w)
-    my = int(spec.get("margin_y", 0.25) * h)
+    # Portrait: keep the stamp inside the Douyin / Channels safe area (~840x1280 centred-high on
+    # 1080x1920), clear of the right-hand button column and the bottom caption block.
+    # Landscape (shown letterboxed, no UI over the picture): classic bottom-right corner.
+    if h >= w:
+        mx = int(spec.get("margin_x", 0.17) * w)
+        my = int(spec.get("margin_y", 0.25) * h)
+    else:
+        mx = int(spec.get("margin_x_landscape", 0.05) * w)
+        my = int(spec.get("margin_y_landscape", 0.08) * h)
     pos = (w - mx - tw, h - my - th)
     draw.text(pos, text, font=font, fill=color + (235,))
     glow = img.filter(ImageFilter.GaussianBlur(max(2, size // 6)))

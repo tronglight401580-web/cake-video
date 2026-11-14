@@ -1,4 +1,6 @@
-"""cake — 短视频风格化调色 (M0 命令行).
+"""cake — 短视频风格化调色 + 人像精修.
+
+  python -m cake ui [视频...]                                  # 桌面界面
 
   python -m cake grade  in.mp4 [-o out.mp4] --style film_warm [--strength 0.8]
   python -m cake still  in.mp4 --t 2.5 [--style ccd ...] [-o sheet.jpg]
@@ -18,6 +20,10 @@ from .styles import LUT_DIR, list_styles, load_style
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["ui"]:                       # desktop app; its own argument parser
+        from .ui.app import main as ui_main
+        return ui_main(argv[1:])
     ap = argparse.ArgumentParser(prog="cake", description="短视频风格化调色")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -53,7 +59,8 @@ def main(argv=None) -> int:
     s.add_argument("--t", type=float, default=1.0, help="截帧时间（秒）")
     common(s)
 
-    fc = sub.add_parser("face", help="精修检查图：不同精修强度的全图 + 脸部 100% 裁切")
+    fc = sub.add_parser("face", help="精修检查图：不同精修强度的全图 + 脸部放大")
+    sub.add_parser("ui", help="桌面界面（python -m cake ui [视频...]）", add_help=False)
     fc.add_argument("input")
     fc.add_argument("-o", "--output")
     fc.add_argument("-s", "--style", help="叠加某个风格（默认不加风格，只看精修）")

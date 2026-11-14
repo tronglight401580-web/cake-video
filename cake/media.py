@@ -118,6 +118,19 @@ class Decoder:
         self.proc.wait()
         return err
 
+    def kill(self) -> None:
+        """Abort mid-stream (seek / load another clip in the preview)."""
+        try:
+            self.proc.kill()
+        except OSError:
+            pass
+        for s in (self.proc.stdout, self.proc.stderr):
+            try:
+                s.close()
+            except OSError:
+                pass
+        self.proc.wait()
+
 
 class Encoder:
     def __init__(self, info: ClipInfo, out: str, w: int, h: int, fps: Fraction,

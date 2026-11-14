@@ -29,6 +29,21 @@ python tools/platform_sim.py 成片.mp4 --orig 原片.mp4    # 模拟平台二�
 python tools/make_chart.py chart.mp4                    # 生成色卡测试视频
 ```
 
+## 桌面界面（M2）
+```bash
+python -m pip install PySide6-Essentials
+python -m cake ui                      # 也可以带上视频：python -m cake ui a.mp4 b.mp4
+```
+- **左：视频队列**。支持添加视频、添加文件夹，也可以直接把文件拖进窗口；导出后会标上 ✓ 或 ✗。
+- **中：预览**。原片和效果左右对比，分割线可以拖动，也可以切换成只看效果或只看原片；支持播放、暂停、拖动进度条。
+  - 预览按短边 720 渲染，精修全开也能按原帧率播放（实测横屏 25.2 fps、竖屏 24.1～24.4 fps）。
+- **右：参数**。风格、强度、磨皮美颜、祛痘淡斑、黑眼圈、保留痣、标出检测结果。
+  - 暂停时调节参数，当前帧会立刻重新渲染（强度约 0.1 秒；风格的 LUT 在启动时已在后台预加载）。
+  - 祛痘和黑眼圈默认跟随磨皮强度一起变化，手动拖过之后就各自独立。
+- **导出**：可以导出当前视频或全部导出，带进度条，可以取消（会删除写了一半的文件）。导出时自动暂停预览，避免抢占 CPU。
+- **自动测试**：`python tools/test_ui.py`（离屏运行，不弹窗口），覆盖加载、调参重新渲染、跳转、切换视频、导出后取消。
+  - 截图：`python -m cake ui 视频.mp4 --t 3 --screenshot shot.png`（设置环境变量 `QT_QPA_PLATFORM=offscreen` 后不弹窗口）。
+
 ## 人像精修（M1 第一步）
 ```bash
 python -m cake grade 视频.mp4 -s film_warm --retouch 0.5     # 调色 + 精修（默认 0.5）

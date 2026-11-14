@@ -16,6 +16,10 @@ from .styles import Style, render_stamp
 _END = object()
 
 
+class CancelledError(RuntimeError):
+    pass
+
+
 def _pump(src_iter, q: queue.Queue, errors: list):
     try:
         for item in src_iter:
@@ -30,7 +34,8 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
                 max_short: int | None = 1080, start: float | None = None,
                 duration: float | None = None, encoder: str = "auto",
                 tonemap: str = "mobius", retouch: float = 0.5, retouch_opts: dict | None = None,
-                log=print, analyzer=None) -> dict:
+                log=print, analyzer=None, progress=None, cancel=None) -> dict:
+    # progress(n_done, n_total_or_None) every 10 frames; cancel() -> True aborts the export
     """analyzer: pass a cake.face.Analyzer to reuse its warm worker processes across videos
     (batch mode); otherwise one is created (model start-up ~3-6 s) and closed here."""
     info = probe(inp)
@@ -92,6 +97,7 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
     total = int((duration or max(0.0, info.duration - (start or 0))) * float(info.fps)) or None
     t0 = time.perf_counter()
     n = 0
+    cancelled = False
     while (item := in_q.get()) is not _END:
         if analyzer:
             frame, idx = item
@@ -100,6 +106,14 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
             frame = item
         out_q.put(renderer.render(frame, n, yuv=True))   # GPU does RGB -> I420 (Encoder default)
         n += 1
+        if progress is not None and n % 10 == 0:
+            progress(n, total)
+        if cancel is not None and cancel():
+            cancelled = True
+            dec.kill()                                  # unblocks the reader thread
+            while in_q.get() is not _END:               # drain so it can finish
+                pass
+            break
         if n % 60 == 0:
             fps = n / (time.perf_counter() - t0)
             pct = f"{100 * n / total:5.1f}%" if total else ""
@@ -109,10 +123,13 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
     reader.join()
     if analyzer is not None and own_analyzer:
         analyzer.close()
-    dec_err = dec.close()
+    dec_err = "" if cancelled else dec.close()
     code, enc_err = enc.close()
     renderer.release()
     elapsed = time.perf_counter() - t0
+    if cancelled:
+        Path(out).unlink(missing_ok=True)
+        raise CancelledError("已取消")
     if errors or code != 0 or n == 0:
         raise RuntimeError(f"处理失败 (frames={n}, encoder exit={code})\n"
                            f"errors={errors}\ndecoder: {dec_err}\nencoder: {enc_err}")
