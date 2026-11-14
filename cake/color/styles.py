@@ -22,6 +22,7 @@ class Style:
     lut: str = ""                 # file in luts/ or absolute path to any .cube
     skin_lut: str = ""
     skin_protect: float = 0.0
+    shots: list | None = None
     reference: str = ""
     lut_strength: float = 1.0
     bloom_amount: float = 0.0

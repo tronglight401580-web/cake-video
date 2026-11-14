@@ -289,7 +289,7 @@ class PreviewEngine(QThread):
         elif not self._retouch_on():
             self.renderer.mask = None
             self.renderer.skin = None
-        out = self.renderer.render(f, idx)
+        out = self.renderer.render(f, idx + (round(self.base_t * float(self.info.fps)) if self.renderer.style.shots else 0))
         ms = (time.perf_counter() - t0) * 1000
         orig = np.frombuffer(f, np.uint16 if self.high_bit else np.uint8).reshape(self.h, self.w, 3)
         if self.high_bit:

@@ -48,6 +48,7 @@ def main(argv=None) -> int:
     g.add_argument("-o", "--output", help="单个文件：输出文件路径；批量：输出文件夹")
     g.add_argument("-s", "--style", help="风格名，或 .json / .cube 路径")
     g.add_argument("--ref", help="reference photo")
+    g.add_argument("--per-shot", action="store_true")
     g.add_argument("--method", choices=("grade", "mkl"), default="grade")
     g.add_argument("--start", type=float)
     g.add_argument("--duration", type=float)
@@ -76,6 +77,7 @@ def main(argv=None) -> int:
     rs.add_argument("reference")
     rs.add_argument("clips", nargs="+")
     rs.add_argument("--name")
+    rs.add_argument("--per-shot", action="store_true")
     rs.add_argument("--skin-follow", type=float, default=.2)
     rs.add_argument("--method", choices=("grade", "mkl"), default="grade")
 
@@ -88,7 +90,7 @@ def main(argv=None) -> int:
 
     if a.cmd == "refstyle":
         from .refcolor import build_reference_style
-        print(build_reference_style(a.reference, a.clips, a.name, a.skin_follow, method=a.method).name)
+        print(build_reference_style(a.reference, a.clips, a.name, a.skin_follow, method=a.method, per_shot=a.per_shot).name)
         return 0
     if a.cmd == "build-luts":
         from .looks import build_luts
@@ -150,7 +152,7 @@ def _grade(a, max_short, opts) -> int:
         return 1
     if a.ref:
         from .refcolor import build_reference_style
-        st = build_reference_style(a.ref, [str(f) for f in files], method=a.method)
+        st = build_reference_style(a.ref, [str(f) for f in files], method=a.method, per_shot=a.per_shot)
     elif a.style:
         st = load_style(a.style)
     else:

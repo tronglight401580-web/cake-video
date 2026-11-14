@@ -134,7 +134,7 @@ def grade_video(inp: str, out: str, style: Style | None = None, strength: float 
         else:
             frame = item
         # GPU converts to NV12; pipelined readback hands back the previous frame (None at first)
-        done = renderer.render(frame, n, yuv=True, pipelined=True)
+        done = renderer.render(frame, n + (round((start or 0) * float(info.fps)) if style.shots else 0), yuv=True, pipelined=True)
         if done is not None:
             out_q.put(done)
         n += 1
