@@ -1,0 +1,12 @@
+{
+  "title": "日系清新",
+  "lut": "japanese_fresh.cube",
+  "bloom_amount": 0.10,
+  "bloom_threshold": 0.80,
+  "bloom_knee": 0.2,
+  "bloom_radius": 30,
+  "bloom_tint": [1, 1, 1],
+  "vignette": 0,
+  "grain": 0.015,
+  "grain_size": 1.8
+}
