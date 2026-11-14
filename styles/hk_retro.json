@@ -1,0 +1,10 @@
+{
+  "title": "港风",
+  "lut": "hk_retro.cube",
+  "bloom_amount": 0.18,
+  "bloom_radius": 28,
+  "bloom_tint": [1, 0.45, 0.25],
+  "vignette": 0.08,
+  "grain": 0.035,
+  "grain_size": 2.2
+}

@@ -233,11 +233,57 @@ def look_ccd(c):
     return o
 
 
+def look_japanese_fresh(c):
+    o = exposure(c, 0.15)
+    o = white_balance(o, (0.97, 1, 1.03))
+    o = contrast(o, 0.92, pivot=0.5)
+    o = hue_adjust(o, [(110, 35, 10, 0.85, 1), (220, 30, 0, 0.9, 1)])
+    o = saturation(o, 0.88)
+    o = split_tone(o, (0, 0.02, 0.03), (0.01, 0.01, 0))
+    o = levels(o, 0.03, 0.995)
+    return protect_skin(c, o, 0.6)
+
+
+def look_hk_retro(c):
+    o = white_balance(c, (1.06, 1, 0.90))
+    o = contrast(o, 1.25, pivot=0.45)
+    o = hue_adjust(o, [(110, 35, -15, 0.8, 1), (352, 12, 0, 1.15, 1)])
+    o = split_tone(o, (-0.01, 0.04, 0), (0.06, 0.03, -0.04))
+    o = saturation(o, 1.05)
+    o = levels(o, 0.03, 1, (0, 0.01, 0))
+    return protect_skin(c, o, 0.78, target_hue=17)
+
+
+def look_creamy(c):
+    o = exposure(c, 0.12)
+    o = white_balance(o, (1.02, 1, 0.97))
+    o = contrast(o, 0.95)
+    o = saturation(o, 0.9)
+    o = split_tone(o, (0, 0, 0), (0.03, 0.02, -0.01))
+    o = soft_clip(o, 0.85, 1.06)
+    o = levels(o, 0.02)
+    return protect_skin(c, o, 0.8, target_hue=16, max_sat=0.42)
+
+
+def look_black_gold(c):
+    o = exposure(c, 0.10)
+    o = hue_adjust(o, [(210, 45, 0, 0.1, 1), (175, 25, 0, 0.1, 1),
+                       (110, 40, 0, 0.1, 1), (300, 35, 0, 0.1, 1),
+                       (45, 15, -5, 1.2, 1)])
+    o = contrast(o, 1.15)
+    o = levels(o, 0)
+    return protect_skin(c, o, 0.7)
+
+
 LOOKS = {
     "identity": lambda c: c,          # for "不调色（仅精修）"
     "film_warm": look_film_warm,
     "teal_orange": look_teal_orange,
     "ccd": look_ccd,
+    "japanese_fresh": look_japanese_fresh,
+    "hk_retro": look_hk_retro,
+    "creamy": look_creamy,
+    "black_gold": look_black_gold,
 }
 
 

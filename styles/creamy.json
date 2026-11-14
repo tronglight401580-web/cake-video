@@ -1,0 +1,8 @@
+{
+  "title": "奶油肌",
+  "lut": "creamy.cube",
+  "bloom_amount": 0.12,
+  "bloom_threshold": 0.75,
+  "soften": 0.10,
+  "vignette": 0
+}
