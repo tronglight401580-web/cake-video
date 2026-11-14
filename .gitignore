@@ -19,3 +19,6 @@ luts/*.cube
 # Tool outputs
 tools/sim/
 *.log
+
+# golden reference frames (regenerate: python tools/golden.py record)
+tools/results/golden/*.npz

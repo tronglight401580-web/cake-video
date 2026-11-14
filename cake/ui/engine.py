@@ -19,8 +19,7 @@ from ..media import Decoder, target_size
 from ..probe import probe
 from ..styles import load_style, render_stamp
 
-PREVIEW_SHORT = 720          # preview renders at <= 720p short side
-LOOKAHEAD = 6                # frames decoded + submitted for analysis ahead of display
+from ..core.config import PREVIEW_SHORT, LOOKAHEAD
 
 
 @dataclass

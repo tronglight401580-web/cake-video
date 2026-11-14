@@ -17,10 +17,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-MODELS = Path(__file__).resolve().parent.parent / "models"
+from .core.config import MODEL_DIR as MODELS, ANALYSIS_SHORT, CAKE_SEG, CAKE_ANALYZER, SEG_EVERY, PROCESS_WORKERS, THREAD_WORKERS
 SEG_MODEL = MODELS / "selfie_multiclass_256x256.tflite"
 LMK_MODEL = MODELS / "face_landmarker.task"
-ANALYSIS_SHORT = 360          # analysis frame short side, px
 
 # MediaPipe FaceMesh (478-pt) contours. (indices, hull growth factor around the centroid)
 LEFT_EYE = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466]
@@ -42,7 +41,7 @@ _registry_lock = threading.Lock()
 OFFS_SCALE = 8.0                # cheek offset (uv) is stored * 8 in a uint8 channel
 
 # Segmentation backend: "gpu" (ONNX Runtime + DirectML, cake.seg_gpu), "cpu" (MediaPipe) or "auto".
-SEG_BACKEND = os.environ.get("CAKE_SEG", "auto")
+SEG_BACKEND = CAKE_SEG
 _gpu_seg = None
 _gpu_seg_lock = threading.Lock()
 
@@ -274,17 +273,17 @@ class Analyzer:
     spent most of its time waiting for it. Each process has its own GIL (and its own DirectML
     session); only the small analysis frame (~0.7 MB) and the result (~1.4 MB) cross over."""
 
-    def __init__(self, workers: int | None = None, seg_every: int = 2, fps: float = 30.0,
+    def __init__(self, workers: int | None = None, seg_every: int = SEG_EVERY, fps: float = 30.0,
                  cut_threshold: float = 0.12, mode: str | None = None):
-        self.mode = mode or os.environ.get("CAKE_ANALYZER", "process")
+        self.mode = mode or CAKE_ANALYZER
         if self.mode == "process":
             from concurrent.futures import ProcessPoolExecutor
-            n = workers or 3
+            n = workers or PROCESS_WORKERS
             self.pool = ProcessPoolExecutor(max_workers=n)
             # load models in every worker up front (~2-4 s) instead of during the first frames
             self.warm = [self.pool.submit(_proc_warm, i) for i in range(n)]
         else:
-            self.pool = ThreadPoolExecutor(max_workers=workers or 4, thread_name_prefix="face")
+            self.pool = ThreadPoolExecutor(max_workers=workers or THREAD_WORKERS, thread_name_prefix="face")
         self.seg_every = max(1, seg_every)
         self.frame_ms = 1000.0 / max(fps, 1.0)
         self.cut = cut_threshold

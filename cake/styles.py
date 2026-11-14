@@ -12,9 +12,7 @@ import numpy as np
 
 from .cube import read_cube
 
-ROOT = Path(__file__).resolve().parent.parent
-STYLE_DIR = ROOT / "styles"
-LUT_DIR = ROOT / "luts"
+from .core.config import ROOT, STYLE_DIR, LUT_DIR
 
 
 @dataclass

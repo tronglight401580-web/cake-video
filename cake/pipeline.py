@@ -1,7 +1,6 @@
 """High-level operations: grade a whole video, or render before/after stills."""
 from __future__ import annotations
 
-import os
 import queue
 import threading
 import time
@@ -9,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .core.config import CAKE_YUV
+from .core.bus import bus
 from .gpu import Renderer
 from .media import Decoder, Encoder, pick_encoder, source_matrix, target_size, yuv_capable
 from .probe import ClipInfo, probe
@@ -39,6 +40,16 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
     # progress(n_done, n_total_or_None) every 10 frames; cancel() -> True aborts the export
     """analyzer: pass a cake.face.Analyzer to reuse its warm worker processes across videos
     (batch mode); otherwise one is created (model start-up ~3-6 s) and closed here."""
+    old_log, old_progress = log, progress
+    def log(message):
+        bus.publish('log', message=message)
+        if old_log is not None:
+            old_log(message)
+    def progress(done, total):
+        bus.publish('progress', done=done, total=total)
+        if old_progress is not None:
+            old_progress(done, total)
+    bus.publish('status', status='started', input=inp, output=out)
     info = probe(inp)
     own_analyzer = False
     needs_analysis = retouch > 0 or bool(style.skin_lut and style.skin_protect > 0)
@@ -59,7 +70,7 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
 
     # GPU YUV->RGB input path: measured no gain while the GPU is the bottleneck (retouch on),
     # slower on 720p -> opt-in via CAKE_YUV=1
-    yuv = source_matrix(info) if (os.environ.get("CAKE_YUV") == "1" and yuv_capable(info, high_bit)) else None
+    yuv = source_matrix(info) if (CAKE_YUV and yuv_capable(info, high_bit)) else None
     renderer = Renderer(w, h, high_bit, yuv)
     renderer.set_style(style, strength, render_stamp(style, w, h, inp))
     renderer.skin_protect_scale = skin_protect_scale
@@ -147,6 +158,7 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
                            f"errors={errors}\ndecoder: {dec_err}\nencoder: {enc_err}")
     stats = {"frames": n, "seconds": elapsed, "fps": n / elapsed, "out": out}
     log(f"完成: {n} 帧, {elapsed:.1f}s, 平均 {n / elapsed:.1f} fps -> {out}")
+    bus.publish('status', status='completed', **stats)
     return stats
 
 

@@ -1,0 +1,60 @@
+{
+  "configs": {
+    "g1": {
+      "clip": "asian_hush_48036.mp4",
+      "style": "film_warm",
+      "retouch": 0.5,
+      "options": {},
+      "shape": [
+        24,
+        1382400
+      ]
+    },
+    "g2": {
+      "clip": "street_mixed_1227.mp4",
+      "style": "teal_orange_portrait",
+      "retouch": 1.0,
+      "options": {},
+      "shape": [
+        24,
+        3110400
+      ]
+    },
+    "g3": {
+      "clip": "neon_night_1230.mp4",
+      "style": "ccd",
+      "retouch": 0.0,
+      "options": {},
+      "shape": [
+        24,
+        3110400
+      ]
+    },
+    "g4": {
+      "clip": "asian_mother_child_48689.mp4",
+      "style": "none",
+      "retouch": 0.5,
+      "options": {
+        "spots": 1.0,
+        "under": 0.8,
+        "keep_moles": false
+      },
+      "shape": [
+        24,
+        1382400
+      ]
+    },
+    "g5": {
+      "clip": "beach_daylight_1221.mp4",
+      "style": "golden_ref",
+      "retouch": 0.0,
+      "options": {},
+      "shape": [
+        24,
+        3110400
+      ]
+    }
+  },
+  "mean_tolerance": 0.05,
+  "max_tolerance": 2
+}

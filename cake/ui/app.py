@@ -30,7 +30,7 @@ from .engine import PreviewEngine
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi"}
 ROLE_PATH = Qt.ItemDataRole.UserRole
 ROLE_SETTINGS = Qt.ItemDataRole.UserRole + 1
-PRESETS_FILE = Path(os.environ.get("APPDATA", Path.home())) / "cake" / "presets.json"
+from ..core.config import PRESETS_FILE
 
 
 def load_presets() -> dict:
