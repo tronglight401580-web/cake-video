@@ -1,0 +1,14 @@
+{
+  "title": "青橙电影·人像",
+  "comment": "Softened teal & orange for faces: same LUT at ~55%, almost no vignette, no grain.",
+  "lut": "teal_orange.cube",
+  "lut_strength": 0.55,
+  "bloom_amount": 0.08,
+  "bloom_threshold": 0.82,
+  "bloom_knee": 0.15,
+  "bloom_radius": 40,
+  "bloom_tint": [1.0, 0.9, 0.8],
+  "vignette": 0.04,
+  "vignette_soft": 0.6,
+  "grain": 0.0
+}

@@ -1,0 +1,5 @@
+{
+  "title": "不调色（仅精修）",
+  "comment": "Identity LUT, no effects: use with --retouch to only retouch skin.",
+  "lut": "identity.cube"
+}

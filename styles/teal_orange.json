@@ -1,0 +1,15 @@
+{
+  "title": "青橙电影·风景城市",
+  "comment": "Blockbuster teal & orange. Best for landscape / city / travel; for faces use teal_orange_portrait.",
+  "lut": "teal_orange.cube",
+  "bloom_amount": 0.12,
+  "bloom_threshold": 0.8,
+  "bloom_knee": 0.15,
+  "bloom_radius": 40,
+  "bloom_tint": [1.0, 0.85, 0.7],
+  "vignette": 0.1,
+  "vignette_soft": 0.6,
+  "grain": 0.025,
+  "grain_size": 2.0,
+  "grain_chroma": 0.08
+}

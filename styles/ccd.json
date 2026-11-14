@@ -1,0 +1,20 @@
+{
+  "title": "CCD 复古",
+  "comment": "2000s pocket digicam: glow, softness, slight CA, digital chroma noise, orange date stamp.",
+  "lut": "ccd.cube",
+  "bloom_amount": 0.38,
+  "bloom_threshold": 0.62,
+  "bloom_knee": 0.25,
+  "bloom_radius": 34,
+  "bloom_tint": [0.95, 0.98, 1.0],
+  "ca": 0.004,
+  "soften": 0.45,
+  "vignette": 0.06,
+  "vignette_soft": 0.5,
+  "grain": 0.03,
+  "grain_size": 1.8,
+  "grain_chroma": 0.7,
+  "stamp": {"text": "auto", "color": [1.0, 0.52, 0.12], "size": 46,
+            "comment": "Douyin safe area: right of x=900 is the button column, below y=1480 is the caption",
+            "margin_x": 0.17, "margin_y": 0.25}
+}

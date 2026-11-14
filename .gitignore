@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Model conversion venv (~1.6 GB, only needed to re-run tools/convert_seg_onnx.py)
+.cv/
+
+# Test footage + rendered outputs (third-party clips, hundreds of MB)
+samples/
+
+# Models: downloaded / converted, see README "模型" section
+models/*.tflite
+models/*.task
+models/*.onnx
+
+# Generated: python -m cake build-luts
+luts/*.cube
+
+# Tool outputs
+tools/sim/
+*.log
