@@ -1,6 +1,7 @@
 """High-level operations: grade a whole video, or render before/after stills."""
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -9,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from .gpu import Renderer
-from .media import Decoder, Encoder, pick_encoder, target_size
+from .media import Decoder, Encoder, pick_encoder, source_matrix, target_size, yuv_capable
 from .probe import ClipInfo, probe
 from .styles import Style, render_stamp
 
@@ -55,10 +56,13 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
     log(f"输出: {w}x{h}, 风格={style.title or style.name}, 强度={strength:.2f}, "
         f"精修={retouch:.2f}, {'16bit' if high_bit else '8bit'} 处理, 编码器={encoder}")
 
-    renderer = Renderer(w, h, high_bit)
+    # GPU YUV->RGB input path: measured no gain while the GPU is the bottleneck (retouch on),
+    # slower on 720p -> opt-in via CAKE_YUV=1
+    yuv = source_matrix(info) if (os.environ.get("CAKE_YUV") == "1" and yuv_capable(info, high_bit)) else None
+    renderer = Renderer(w, h, high_bit, yuv)
     renderer.set_style(style, strength, render_stamp(style, w, h, inp))
     renderer.set_retouch(retouch, **(retouch_opts or {}))
-    dec = Decoder(info, w, h, high_bit, start, duration, tonemap=tonemap)
+    dec = Decoder(info, w, h, high_bit, start, duration, tonemap=tonemap, yuv=yuv is not None)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     enc = Encoder(info, out, w, h, info.fps, encoder, start, duration)
 
@@ -71,7 +75,7 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
 
         def _submitting(src):
             for i, f in enumerate(src):
-                analyzer.submit(f, w, h, high_bit, i)
+                analyzer.submit(f, w, h, high_bit, i, yuv)
                 yield f, i
             analyzer.finish()
         frames = _submitting(frames)
@@ -104,7 +108,10 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
             renderer.set_face(analyzer.result(idx))
         else:
             frame = item
-        out_q.put(renderer.render(frame, n, yuv=True))   # GPU does RGB -> I420 (Encoder default)
+        # GPU converts to NV12; pipelined readback hands back the previous frame (None at first)
+        done = renderer.render(frame, n, yuv=True, pipelined=True)
+        if done is not None:
+            out_q.put(done)
         n += 1
         if progress is not None and n % 10 == 0:
             progress(n, total)
@@ -118,6 +125,9 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
             fps = n / (time.perf_counter() - t0)
             pct = f"{100 * n / total:5.1f}%" if total else ""
             log(f"  {n}{'/' + str(total) if total else ''} 帧 {pct}  {fps:.1f} fps")
+    last = renderer.flush()                             # the frame still in flight
+    if last is not None and not cancelled:
+        out_q.put(last)
     out_q.put(_END)
     writer.join()
     reader.join()

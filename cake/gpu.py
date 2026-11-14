@@ -9,9 +9,11 @@ from .styles import Style
 
 
 class Renderer:
-    def __init__(self, w: int, h: int, high_bit: bool):
+    def __init__(self, w: int, h: int, high_bit: bool, yuv: tuple | None = None):
+        """yuv=(matrix, range) e.g. ('bt709', 'tv'): frames passed to render() are I420."""
         self.w, self.h = w, h
         self.high_bit = high_bit
+        self.yuv = yuv
         self.scale = min(w, h) / 1080.0
         ctx = self.ctx = moderngl.create_standalone_context(require=330)
 
@@ -37,6 +39,17 @@ class Renderer:
         dtype = "nu2" if high_bit else "f1"
         self.src = ctx.texture((w, h), 3, dtype=dtype, alignment=1)
         self.src.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.p_yuv2rgb, self.va_yuv2rgb = prog(shaders.YUV2RGB)
+        if yuv:
+            self.planes = [ctx.texture(s, 1, dtype="f1", alignment=1)
+                           for s in ((w, h), (w // 2, h // 2), (w // 2, h // 2))]
+            for t in self.planes:
+                t.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                t.repeat_x = t.repeat_y = False
+            kr, kb = (0.299, 0.114) if yuv[0] == "bt601" else (0.2126, 0.0722)
+            self._yuv_uniforms = dict(ytex=0, utex=1, vtex=2, kr=kr, kb=kb,
+                                      full_range=1.0 if yuv[1] == "pc" else 0.0)
+            self._plane_sizes = (w * h, w * h // 4)
 
         def rt(size):
             t = ctx.texture(size, 4, dtype="f2")
@@ -45,6 +58,9 @@ class Renderer:
             return t, ctx.framebuffer(color_attachments=[t])
 
         self.graded, self.fb_graded = rt((w, h))
+        if yuv:
+            self.srcrgb, self.fb_srcrgb = rt((w, h))
+        self.inp = self.src            # the RGB input texture all passes read (per frame)
         self.retouched, self.fb_retouched = rt((w, h))
         self.healed, self.fb_healed = rt((w, h))
         hw, hh = max(1, w // 2), max(1, h // 2)          # half-res pyramid for blemish detection
@@ -73,6 +89,9 @@ class Renderer:
         self.fb_out = ctx.framebuffer(color_attachments=[self.out])
         self.out16, self.fb_out16 = rt((w, h))       # finish target for the YUV output path
         self._yuv = None
+        self._pbo = None                             # pipelined readback (2 pixel buffers)
+        self._pbo_i = 0
+        self._pending = None
 
         self.lut = None
         self.stamp = ctx.texture((1, 1), 4, data=bytes(4))
@@ -188,7 +207,7 @@ class Renderer:
         spot_r = float(np.clip(face_px * 0.012, 1.5, 14.0))      # typical pimple radius, px
         # half-res, skin-weighted downsample (background / hair / eyes never leak into the blurs)
         self.fb_h1.use()
-        self.src.use(0)
+        self.inp.use(0)
         self.mask.use(1)
         self._set(self.p_skindown, src=0, mask=1, src_texel=(0.5 / self.w, 0.5 / self.h))
         self.va_skindown.render(moderngl.TRIANGLE_STRIP)
@@ -196,7 +215,7 @@ class Renderer:
         self._blur(self.h1, self.fb_hmed, s_med)
         self._blur(self.hmed, self.fb_hbase, float(np.sqrt(max(s_base ** 2 - s_med ** 2, 0.01))))
         self.fb_healed.use()
-        self.src.use(0)
+        self.inp.use(0)
         self.mask.use(1)
         self.hmed.use(2)
         self.hbase.use(3)
@@ -206,6 +225,24 @@ class Renderer:
                   hstep=(spot_r / self.w, spot_r / self.h), texel=(1 / self.w, 1 / self.h))
         self.va_heal.render(moderngl.TRIANGLE_STRIP)
 
+    def _upload(self, frame: bytes) -> None:
+        """Upload one input frame; for I420 input convert to RGB on the GPU."""
+        if not self.yuv:
+            self.src.write(frame)
+            self.inp = self.src
+            return
+        ny, nc = self._plane_sizes
+        mv = memoryview(frame)
+        self.planes[0].write(mv[:ny])
+        self.planes[1].write(mv[ny:ny + nc])
+        self.planes[2].write(mv[ny + nc:ny + 2 * nc])
+        self.fb_srcrgb.use()
+        for i, t in enumerate(self.planes):
+            t.use(i)
+        self._set(self.p_yuv2rgb, **self._yuv_uniforms)
+        self.va_yuv2rgb.render(moderngl.TRIANGLE_STRIP)
+        self.inp = self.srcrgb
+
     @staticmethod
     def _set(p, **kw):
         for k, v in kw.items():
@@ -213,18 +250,21 @@ class Renderer:
                 p[k].value = v
 
     # ------------------------------------------------------------- render
-    def render(self, frame: bytes, index: int, yuv: bool = False) -> bytes:
-        """Returns packed RGB24, or (yuv=True) NV12, BT.709 limited range."""
+    def render(self, frame: bytes, index: int, yuv: bool = False,
+               pipelined: bool = False) -> bytes | None:
+        """Returns packed RGB24, or (yuv=True) NV12, BT.709 limited range.
+        pipelined=True (with yuv): returns the PREVIOUS frame (None for the first); call flush()
+        at the end - overlaps the GPU->CPU copy with the next frame's work."""
         st = self.style
-        self.src.write(frame)
-        base = self.src
+        self._upload(frame)
+        base = self.inp
 
         # 0. retouch (needs a mask from cake.face): a) blemishes + dark circles, b) smoothing
         if self.retouch > 0 and self.mask is not None:
             r = self.retouch
             spots = min(1.0, 1.6 * r) if self.spots is None else self.spots
             under = min(0.8, 0.9 * r) if self.under is None else self.under
-            heal_src = self.src
+            heal_src = self.inp
             if (spots > 0 or under > 0) and self.mask.components >= 4:
                 self._heal(spots, under)
                 heal_src = self.healed
@@ -290,8 +330,26 @@ class Renderer:
                 t = self.ctx.texture(size, comps, dtype="f1")
                 planes.append((t, self.ctx.framebuffer(color_attachments=[t]), comps))
             self._yuv = planes
-        parts = []
         self.out16.use(0)
+        if pipelined:
+            # read into a pixel-buffer object: glReadPixels returns immediately, the copy runs
+            # on the GPU while the CPU moves on; we hand back the PREVIOUS frame's buffer.
+            if self._pbo is None:
+                n = self.w * self.h * 3 // 2
+                self._pbo = [self.ctx.buffer(reserve=n), self.ctx.buffer(reserve=n)]
+            pbo = self._pbo[self._pbo_i]
+            offset = 0
+            for i, (t, fb, comps) in enumerate(self._yuv):
+                fb.use()
+                self._set(self.p_toyuv, src=0, src_texel=(1 / self.w, 1 / self.h),
+                          plane=float(i), frame=float(index % 4096))
+                self.va_toyuv.render(moderngl.TRIANGLE_STRIP)
+                fb.read_into(pbo, components=comps, alignment=1, write_offset=offset)
+                offset += t.width * t.height * comps
+            prev, self._pending = self._pending, pbo
+            self._pbo_i ^= 1
+            return prev.read() if prev is not None else None
+        parts = []
         for i, (t, fb, comps) in enumerate(self._yuv):
             fb.use()
             self._set(self.p_toyuv, src=0, src_texel=(1 / self.w, 1 / self.h), plane=float(i),
@@ -299,6 +357,11 @@ class Renderer:
             self.va_toyuv.render(moderngl.TRIANGLE_STRIP)
             parts.append(fb.read(components=comps, alignment=1))
         return b"".join(parts)
+
+    def flush(self) -> bytes | None:
+        """Pipelined mode: return the last frame still in flight (call once after the loop)."""
+        prev, self._pending = self._pending, None
+        return prev.read() if prev is not None else None
 
     def release(self):
         self.ctx.release()

@@ -21,6 +21,32 @@ float hash12(vec2 p) {
 }
 """
 
+# I420 input -> RGB (display-referred, gamma). Replaces ffmpeg's CPU conversion on 8-bit SDR
+# sources. kr/kb: BT.709 (0.2126, 0.0722) or BT.601 (0.299, 0.114); limited or full range.
+YUV2RGB = COMMON + """
+uniform sampler2D ytex;
+uniform sampler2D utex;
+uniform sampler2D vtex;
+uniform float kr;
+uniform float kb;
+uniform float full_range;
+void main() {
+    float Y = texture(ytex, uv).r, U = texture(utex, uv).r, V = texture(vtex, uv).r;
+    float y, cb, cr;
+    if (full_range > 0.5) {
+        y = Y; cb = U - 0.5; cr = V - 0.5;
+    } else {
+        y = (Y - 16.0 / 255.0) * (255.0 / 219.0);
+        cb = (U - 128.0 / 255.0) * (255.0 / 224.0);
+        cr = (V - 128.0 / 255.0) * (255.0 / 224.0);
+    }
+    float r = y + 2.0 * (1.0 - kr) * cr;
+    float b = y + 2.0 * (1.0 - kb) * cb;
+    float g = (y - kr * r - kb * b) / (1.0 - kr - kb);
+    o = vec4(clamp(vec3(r, g, b), 0.0, 1.0), 1.0);
+}
+"""
+
 # Mask assembly + temporal EMA, at analysis resolution (was ~30 ms/frame of numpy on the CPU).
 # segA/segB: face-skin / body-skin of the two neighbouring segmentation key frames, interpolated
 # by t. layers: R eyes/brows/lips cut-out, G nostril cut-out, B under-eye band, A offset*8.

@@ -25,6 +25,7 @@ def wait(app, cond, timeout=60.0, what=""):
 
 
 def main():
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from cake.ui.app import MainWindow
     app = QApplication(sys.argv)
@@ -64,6 +65,62 @@ def main():
     wait(app, lambda: win.frames_seen > n0 and win.view.graded.height() > win.view.graded.width(),
          30, "portrait clip loaded")
     print("switched to portrait clip:", win.view.graded.width(), "x", win.view.graded.height())
+
+    # queue thumbnails (background ffmpeg)
+    wait(app, lambda: all(not win.queue.item(r).icon().isNull() for r in range(win.queue.count())),
+         20, "queue thumbnails")
+    print("thumbnails: ok")
+
+    # per-clip settings: clip 0 strength 40, clip 1 keeps its own
+    win.queue.setCurrentRow(0)
+    wait(app, lambda: win.queue.currentRow() == 0, 5)
+    win.strength.setValue(40)
+    wait(app, lambda: (win.queue.item(0).data(Qt.ItemDataRole.UserRole + 1) or {}).get("strength") == 0.4,
+         5, "clip 0 settings stored")
+    win.queue.setCurrentRow(1)
+    wait(app, lambda: win.strength.value() == 100, 5, "clip 1 own strength")
+    win.queue.setCurrentRow(0)
+    wait(app, lambda: win.strength.value() == 40, 5, "clip 0 strength restored")
+    print("per-clip settings: ok")
+
+    # frame step (paused)
+    wait(app, lambda: win.frames_seen > 0, 30)
+    time.sleep(1.0)
+    app.processEvents()
+    n0 = win.frames_seen
+    win.engine.step(+1)
+    wait(app, lambda: win.frames_seen > n0, 10, "frame step")
+    print("frame step: ok")
+
+    # presets (written to a temp file, not the user's real presets)
+    import cake.ui.app as appmod
+    appmod.PRESETS_FILE = Path(tempfile.mkdtemp(prefix="cake_presets_")) / "presets.json"
+    win.style_box.setCurrentIndex(win.style_box.findData("ccd"))
+    win.presets = {"测试预设": win.settings()}
+    appmod.save_presets(win.presets)
+    win.style_box.setCurrentIndex(win.style_box.findData("film_warm"))
+    win._reload_presets(select="测试预设")
+    win._apply_preset()
+    assert win.style_box.currentData() == "ccd", win.style_box.currentData()
+    win._apply_to_all()
+    assert all((win.queue.item(r).data(Qt.ItemDataRole.UserRole + 1) or {}).get("style") == "ccd"
+               for r in range(win.queue.count()))
+    print("presets + apply-to-all: ok")
+
+    # export one clip fully: output complete, 'open folder' enabled
+    out1 = Path(tempfile.mkdtemp(prefix="cake_ui1_"))
+    win.out_dir.setText(str(out1))
+    win.queue.setCurrentRow(1)
+    win._export(all_items=False)
+    wait(app, lambda: win.export_worker is None, 180, "single export")
+    files = list(out1.glob("*.mp4"))
+    assert len(files) == 1 and win.open_out.isEnabled(), (files, win.export_status.text())
+    import subprocess
+    nb = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                         "stream=nb_frames", "-of", "csv=p=0", str(files[0])],
+                        capture_output=True, text=True).stdout.strip()
+    print("single export:", win.export_status.text(), "| frames", nb)
+    assert nb == "185", nb
 
     # export + cancel: no partial file left behind
     out = Path(tempfile.mkdtemp(prefix="cake_ui_"))

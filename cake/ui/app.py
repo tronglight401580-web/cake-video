@@ -17,10 +17,42 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, 
                                QListWidgetItem, QMainWindow, QMessageBox, QProgressBar,
                                QPushButton, QSlider, QSplitter, QVBoxLayout, QWidget)
 
+import json
+import os
+import subprocess
+import threading
+
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
+
 from ..styles import list_styles
 from .engine import PreviewEngine
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi"}
+ROLE_PATH = Qt.ItemDataRole.UserRole
+ROLE_SETTINGS = Qt.ItemDataRole.UserRole + 1
+PRESETS_FILE = Path(os.environ.get("APPDATA", Path.home())) / "cake" / "presets.json"
+
+
+def load_presets() -> dict:
+    try:
+        return json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_presets(p: dict) -> None:
+    PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PRESETS_FILE.write_text(json.dumps(p, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _thumbnail(path: str, height: int = 56) -> bytes | None:
+    """One small JPEG frame for the queue icon (ffmpeg, ~50 ms)."""
+    try:
+        return subprocess.run(["ffmpeg", "-v", "error", "-ss", "1", "-i", path, "-frames:v", "1",
+                               "-vf", f"scale=-2:{height}", "-f", "image2pipe", "-c:v", "mjpeg", "-"],
+                              capture_output=True, timeout=20).stdout or None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
 
 QSS = """
 QWidget { background: #1e1f22; color: #e6e6e6; font-family: "Microsoft YaHei UI"; font-size: 13px; }
@@ -126,9 +158,10 @@ class ExportWorker(QThread):
     item_done = Signal(int, bool, str)
     all_done = Signal(int, int, float)         # ok, total, seconds
 
-    def __init__(self, jobs: list[tuple[int, str]], settings: dict, out_dir: str):
+    def __init__(self, jobs: list[tuple[int, str, dict]], out_dir: str):
+        """jobs: (queue row, path, that clip's own settings)."""
         super().__init__()
-        self.jobs, self.settings, self.out_dir = jobs, settings, out_dir
+        self.jobs, self.out_dir = jobs, out_dir
         self._cancel = False
 
     def cancel(self):
@@ -137,23 +170,23 @@ class ExportWorker(QThread):
     def run(self):
         from ..pipeline import CancelledError, grade_video
         from ..styles import load_style
-        s = self.settings
-        st = load_style(s["style"])
         analyzer = None
         ok = 0
         t0 = time.perf_counter()
         try:
-            if s["retouch"] > 0:
+            if any(s["retouch"] > 0 for _, _, s in self.jobs):
                 from ..face import Analyzer
-                analyzer = Analyzer()
-            for row, path in self.jobs:
+                analyzer = Analyzer()             # one warm pool for the whole batch
+            for row, path, s in self.jobs:
                 if self._cancel:
                     break
+                st = load_style(s["style"])
                 self.item_started.emit(row, Path(path).name)
                 out = str(Path(self.out_dir) / f"{Path(path).stem}_{st.name}.mp4")
                 try:
                     grade_video(path, out, st, s["strength"], retouch=s["retouch"],
-                                retouch_opts=s["opts"], log=lambda *a: None, analyzer=analyzer,
+                                retouch_opts={**s["opts"], "debug": False}, log=lambda *a: None,
+                                analyzer=analyzer if s["retouch"] > 0 else None,
                                 progress=lambda n, tot, r=row: self.item_progress.emit(r, n, tot or 0),
                                 cancel=lambda: self._cancel)
                     ok += 1
@@ -177,6 +210,8 @@ def _slider(lo: int, hi: int, val: int) -> QSlider:
 
 
 class MainWindow(QMainWindow):
+    thumb_ready = Signal(str, bytes)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("视频调色 · 精修")
@@ -214,8 +249,10 @@ class MainWindow(QMainWindow):
         e.start()
         self._send_params()
         # parse every style's LUT in the background so switching styles is instant
-        import threading
         threading.Thread(target=lambda: [s.load_lut() for s in list_styles()], daemon=True).start()
+        self.thumb_ready.connect(self._set_thumb)
+        self._applying = False         # True while settings are pushed into the widgets
+        self._install_shortcuts()
 
     # ---------------------------------------------------------------- layout
     def _build_queue(self) -> QWidget:
@@ -264,6 +301,26 @@ class MainWindow(QMainWindow):
         w.setMinimumWidth(290)
         v = QVBoxLayout(w)
         v.setContentsMargins(4, 8, 8, 8)
+
+        g = QGroupBox("我的预设")
+        gv = QVBoxLayout(g)
+        row = QHBoxLayout()
+        self.preset_box = QComboBox()
+        self.preset_box.setPlaceholderText("（无）")
+        b_apply = QPushButton("应用")
+        b_apply.clicked.connect(self._apply_preset)
+        row.addWidget(self.preset_box, 1)
+        row.addWidget(b_apply)
+        gv.addLayout(row)
+        row = QHBoxLayout()
+        for text, fn in (("存为预设", self._save_preset), ("删除预设", self._delete_preset),
+                         ("应用到全部", self._apply_to_all)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        gv.addLayout(row)
+        v.addWidget(g)
+        self._reload_presets()
 
         g = QGroupBox("风格")
         f = QFormLayout(g)
@@ -330,8 +387,12 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.export_status = QLabel("")
         self.export_status.setWordWrap(True)
+        self.open_out = QPushButton("打开输出文件夹")
+        self.open_out.setEnabled(False)
+        self.open_out.clicked.connect(lambda: os.startfile(self.last_out_dir))
         gv.addWidget(self.progress)
         gv.addWidget(self.export_status)
+        gv.addWidget(self.open_out)
         v.addWidget(g)
         v.addStretch(1)
         self.info_lbl = QLabel("")
@@ -379,6 +440,94 @@ class MainWindow(QMainWindow):
         self.engine.set_params(style=s["style"], strength=s["strength"], retouch=s["retouch"],
                                spots=s["opts"]["spots"], eyes=s["opts"]["under"],
                                keep_moles=s["opts"]["keep_moles"], debug=self.debug.isChecked())
+        it = self.queue.currentItem()
+        if it is not None and not self._applying:
+            it.setData(ROLE_SETTINGS, s)          # every clip remembers its own settings
+
+    def apply_settings(self, s: dict):
+        """Push a settings dict into the widgets (one engine update at the end)."""
+        self._applying = True
+        try:
+            self.style_box.setCurrentIndex(max(0, self.style_box.findData(s["style"])))
+            self.strength.setValue(round(s["strength"] * 100))
+            self.retouch.setValue(round(s["retouch"] * 100))
+            self.spots.setValue(round(s["opts"]["spots"] * 100))
+            self.eyes.setValue(round(s["opts"]["under"] * 100))
+            self.keep_moles.setChecked(s["opts"]["keep_moles"])
+            self.spots_touched = self.eyes_touched = True
+        finally:
+            self._applying = False
+        self.param_timer.stop()
+        self._send_params()
+
+    # ---------------------------------------------------------------- presets
+    def _reload_presets(self, select: str | None = None):
+        self.presets = load_presets()
+        self.preset_box.clear()
+        for name in self.presets:
+            self.preset_box.addItem(name)
+        if select:
+            self.preset_box.setCurrentText(select)
+
+    def _save_preset(self):
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "存为预设", "预设名称：",
+                                        text=self.style_box.currentText())
+        if ok and name.strip():
+            self.presets[name.strip()] = self.settings()
+            save_presets(self.presets)
+            self._reload_presets(select=name.strip())
+            self.statusBar().showMessage(f"已保存预设「{name.strip()}」")
+
+    def _apply_preset(self):
+        s = self.presets.get(self.preset_box.currentText())
+        if s:
+            self.apply_settings(s)
+
+    def _delete_preset(self):
+        name = self.preset_box.currentText()
+        if name in self.presets:
+            del self.presets[name]
+            save_presets(self.presets)
+            self._reload_presets()
+
+    def _apply_to_all(self):
+        s = self.settings()
+        for r in range(self.queue.count()):
+            self.queue.item(r).setData(ROLE_SETTINGS, s)
+        self.statusBar().showMessage(f"当前参数已应用到全部 {self.queue.count()} 段视频")
+
+    # ---------------------------------------------------------------- shortcuts
+    def _install_shortcuts(self):
+        def sc(key, fn):
+            s = QShortcut(QKeySequence(key), self)
+            s.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            s.activated.connect(fn)
+        sc(Qt.Key.Key_Space, self._toggle_play)
+        sc(Qt.Key.Key_Right, lambda: self.engine.step(+1))
+        sc(Qt.Key.Key_Left, lambda: self.engine.step(-1))
+        sc(Qt.Key.Key_Up, lambda: self.queue.setCurrentRow(max(0, self.queue.currentRow() - 1)))
+        sc(Qt.Key.Key_Down, lambda: self.queue.setCurrentRow(
+            min(self.queue.count() - 1, self.queue.currentRow() + 1)))
+        sc("Ctrl+O", self._add_files)
+        sc("Ctrl+E", lambda: self._export(all_items=False))
+        sc("Ctrl+Shift+E", lambda: self._export(all_items=True))
+
+    def keyPressEvent(self, e):
+        # hold "\" to see the original (like a before/after toggle in photo editors)
+        if e.key() == Qt.Key.Key_Backslash and not e.isAutoRepeat():
+            self._mode_before_hold = self.view.mode
+            self.view.mode = "original"
+            self.view.update()
+        else:
+            super().keyPressEvent(e)
+
+    def keyReleaseEvent(self, e):
+        if e.key() == Qt.Key.Key_Backslash and not e.isAutoRepeat():
+            self.view.mode = getattr(self, "_mode_before_hold", self.mode_box.currentData())
+            self.view.update()
+        else:
+            super().keyReleaseEvent(e)
 
     # ---------------------------------------------------------------- queue
     def add_paths(self, paths):
@@ -390,10 +539,12 @@ class MainWindow(QMainWindow):
                 if f.suffix.lower() not in VIDEO_EXT:
                     continue
                 it = QListWidgetItem(f.name)
-                it.setData(Qt.ItemDataRole.UserRole, str(f))
+                it.setData(ROLE_PATH, str(f))
+                it.setData(ROLE_SETTINGS, self.settings())   # new clips start from current settings
                 it.setToolTip(str(f))
                 self.queue.addItem(it)
                 first_new = first_new if first_new is not None else self.queue.count() - 1
+                threading.Thread(target=lambda p=str(f): self._make_thumb(p), daemon=True).start()
         if first_new is not None and self.queue.currentRow() < 0:
             self.queue.setCurrentRow(first_new)
 
@@ -411,11 +562,29 @@ class MainWindow(QMainWindow):
         if r >= 0:
             self.queue.takeItem(r)
 
+    def _make_thumb(self, path: str):
+        data = _thumbnail(path)
+        if data:
+            self.thumb_ready.emit(path, data)
+
+    def _set_thumb(self, path: str, data: bytes):
+        pm = QPixmap()
+        if not pm.loadFromData(data):
+            return
+        for r in range(self.queue.count()):
+            it = self.queue.item(r)
+            if it.data(ROLE_PATH) == path:
+                it.setIcon(QIcon(pm))
+        self.queue.setIconSize(pm.size().boundedTo(pm.size()))
+
     def _on_select(self, row: int):
         if row < 0:
             return
-        path = self.queue.item(row).data(Qt.ItemDataRole.UserRole)
-        self.engine.load(path)
+        it = self.queue.item(row)
+        s = it.data(ROLE_SETTINGS)
+        if s:
+            self.apply_settings(s)                 # restore this clip's own settings
+        self.engine.load(it.data(ROLE_PATH))
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -461,14 +630,19 @@ class MainWindow(QMainWindow):
             self.out_dir.setText(d)
 
     def _export(self, all_items: bool):
+        if self.export_worker is not None:
+            return
         rows = range(self.queue.count()) if all_items else [self.queue.currentRow()]
-        jobs = [(r, self.queue.item(r).data(Qt.ItemDataRole.UserRole)) for r in rows if r >= 0]
+        jobs = [(r, self.queue.item(r).data(ROLE_PATH),
+                 self.queue.item(r).data(ROLE_SETTINGS) or self.settings()) for r in rows if r >= 0]
         if not jobs:
             return
         out_dir = self.out_dir.text().strip() or str(Path(jobs[0][1]).parent / "cake_out")
         Path(out_dir).mkdir(parents=True, exist_ok=True)
+        self.last_out_dir = out_dir
+        self.open_out.setEnabled(False)
         self.engine.pause()                       # don't fight the export for the CPU
-        self.export_worker = w = ExportWorker(jobs, self.settings(), out_dir)
+        self.export_worker = w = ExportWorker(jobs, out_dir)
         w.item_started.connect(lambda r, name: self.export_status.setText(f"正在导出 {name} …"))
         w.item_progress.connect(self._on_export_progress)
         w.item_done.connect(self._on_item_done)
@@ -497,6 +671,7 @@ class MainWindow(QMainWindow):
 
     def _on_export_done(self, ok: int, total: int, secs: float):
         self.export_status.setText(f"完成 {ok}/{total}，用时 {secs:.1f}s")
+        self.open_out.setEnabled(ok > 0)
         for b in (self.export_one, self.export_all):
             b.setEnabled(True)
         self.cancel_btn.setEnabled(False)

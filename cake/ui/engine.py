@@ -69,6 +69,10 @@ class PreviewEngine(QThread):
     def set_params(self, **kw):
         self.cmds.put(("params", kw))
 
+    def step(self, delta: int):
+        """Paused: show the next (+1) or previous (-1) frame."""
+        self.cmds.put(("step", delta))
+
     def stop(self):
         self.cmds.put(("stop",))
         self.wait(5000)
@@ -90,6 +94,14 @@ class PreviewEngine(QThread):
         self.idx_play0 = 0
         running = True
         try:
+            # start the retouch worker processes right away (~3-6 s) - while the user is still
+            # picking files - instead of on the first clip
+            if self.params.retouch > 0:
+                from ..face import Analyzer
+                self.status.emit("正在后台加载精修模型…")
+                self.analyzer = Analyzer()
+                self.analyzer.wait_ready()
+                self.status.emit("精修模型就绪")
             while running:
                 try:
                     cmd = self.cmds.get(timeout=0 if self.playing else 0.05)
@@ -131,6 +143,13 @@ class PreviewEngine(QThread):
                 self._show_next()
             else:
                 self.t_play0, self.idx_play0 = time.perf_counter(), 0
+        elif kind == "step" and self.info and not self.playing and self.last is not None:
+            if cmd[1] > 0:
+                self._show_next()
+            else:
+                t = self.base_t + (self.last[1] - 1) / float(self.info.fps)
+                self._open_at(max(0.0, t))
+                self._show_next()
         elif kind == "params":
             self._apply_params(cmd[1])
             if not self.playing and self.last is not None:
