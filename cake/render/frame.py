@@ -20,3 +20,7 @@ class FrameContext:
     @property
     def style(self):
         return self.uniforms.get('style')
+
+    def region(self, name):
+        """Return (texture, RGBA channel) for a registered landmark region."""
+        return self.textures['region:' + name]

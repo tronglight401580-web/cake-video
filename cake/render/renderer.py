@@ -5,6 +5,10 @@ from ..core.registry import registered_passes
 from ..core.recipe import Recipe, RetouchCfg
 from .context import RenderContext
 from .frame import FrameContext
+from ..analysis.smoothing import FaceTracker
+from ..core.config import REGION_EMA_ALPHA
+import numpy as np
+from dataclasses import replace
 from . import passes  # noqa: F401 - imports register built-in stages
 
 
@@ -24,7 +28,7 @@ class Renderer:
         self.mask = self.skin = None
         self.face_h = 0.0
         self.face_boxes = []
-        self.mask_alpha = 0.55
+        self.mask_alpha = REGION_EMA_ALPHA
         self.skin_protect_scale = 1.0
         self.retouch = 0.0
         self.spots = self.under = None
@@ -33,6 +37,8 @@ class Renderer:
         self.style = None
         self.strength = 1.0
         self._face = None
+        self._tracker = FaceTracker()
+        self._region_slots = {}
         self._stamp_rgba = None
         self.recipe = Recipe()
 
@@ -74,13 +80,24 @@ class Renderer:
                     strength=self.strength)
 
     def set_face(self, fi):
-        self._face = fi
-        fc = FrameContext(self.recipe, 0, self.w, self.h, face=fi,
+        ah, aw = fi.layers.shape[:2]
+        raw_landmarks = fi.landmarks or []
+        scale = np.array([self.w / aw, self.h / ah], np.float32)
+        output_landmarks = [np.asarray(face, np.float32) * scale for face in raw_landmarks]
+        smoothed = self._tracker.update(output_landmarks, fi.dt, fi.reset)
+        normalizer = np.array([self.w, self.h], np.float32)
+        face = replace(fi, landmarks=smoothed,
+                       landmarks_norm=[np.clip(points / normalizer, 0, 1)
+                                       for points in smoothed])
+        self._face = face
+        fc = FrameContext(self.recipe, 0, self.w, self.h, face=face,
                           uniforms={**self._uniforms(), 'style': self.style})
         for p in self._passes:
             if getattr(p, 'stage', 'frame') == 'face' and p.enabled(fc.recipe, fc):
                 p.run(fc)
         self.mask, self.skin = fc.textures.get('mask'), fc.textures.get('skin')
+        self._region_slots = {key: value for key, value in fc.textures.items()
+                              if key.startswith('region:')}
         self.face_h, self.face_boxes = fi.face_h, fi.boxes
 
     def render(self, frame: bytes, index: int, yuv: bool = False,
@@ -90,6 +107,7 @@ class Renderer:
             slots['mask'] = self.mask
         if self.skin is not None:
             slots['skin'] = self.skin
+        slots.update(self._region_slots)
         fc = FrameContext(self.recipe, index, self.w, self.h, face=self._face,
                           textures=slots, uniforms={**self._uniforms(), 'style': self.style}, frame=frame,
                           yuv=yuv, pipelined=pipelined)

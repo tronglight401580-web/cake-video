@@ -44,7 +44,7 @@ def test_preview_export_renderer_state():
                                   keep_moles=recipe.retouch.keep_moles,
                                   debug=recipe.retouch.debug,
                                   skin_protect_scale=recipe.skin_protect_scale, demo_tint=.6), force_style=True)
-        assert preview.recipe.demo_tint == .6
+        assert preview.recipe.demo_tint.amount == .6
         _configure_renderer(export, recipe, load_style(recipe.style), 4, 4, 'unused.mp4')
         for key in ('strength', 'retouch', 'spots', 'under', 'mole_keep',
                     'skin_protect_scale'):
@@ -119,3 +119,31 @@ def test_queue_elides_long_names_offscreen():
     assert panel.queue.textElideMode() == Qt.TextElideMode.ElideRight
     widget.close()
     panel.close()
+
+
+def test_registered_sections_roundtrip_and_legacy():
+    from cake.core.recipe import register_section, _sections
+    @register_section('test_extra')
+    @dataclass
+    class Extra:
+        amount: float = field(default=.2, metadata=meta('Extra', .2, 0, 1, .01, 'Extra'))
+    try:
+        recipe = Recipe.from_dict({'sections': {'test_extra': {'amount': .7}, 'future': {'x': [1, 2]}}})
+        assert recipe.test_extra.amount == .7
+        assert recipe.sections['future'] == {'x': [1, 2]}
+        assert Recipe.from_dict(recipe.to_dict()).to_dict() == recipe.to_dict()
+        assert Recipe().test_extra.amount == .2
+        assert Recipe.from_dict({'demo_tint': .6}).demo_tint.amount == .6
+        assert Recipe.from_legacy({'retouch': .5, 'demo_tint': .4}).demo_tint.amount == .4
+    finally:
+        _sections.pop('test_extra')
+
+
+def test_dev_only_section_visibility():
+    from unittest.mock import patch
+    from cake.ui.param_panel import ParamPanel
+    from cake.core import config
+    with patch.object(config, 'CAKE_DEV', False):
+        assert 'demo_tint.amount' not in dict(ParamPanel.field_specs())
+    with patch.object(config, 'CAKE_DEV', True):
+        assert 'demo_tint.amount' in dict(ParamPanel.field_specs())

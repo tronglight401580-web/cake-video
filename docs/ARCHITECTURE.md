@@ -198,3 +198,51 @@ python tools/bench_speed.py samples/street_mixed_1227.mp4
 - 并行运行重负载测试会影响速度数字。
 - 测试生成文件不等同于新的 golden 基线。
 - 修改基线之前应检查输出差异并说明业务原因。
+
+
+## Pluggable Recipe sections
+
+Define a dataclass and decorate it with `@register_section("name")` from
+`cake.core.recipe`. Give its fields `meta(...)` metadata, including `ui` and
+optionally `preview_only` or `dev_only`. Import the module during startup to
+register it. Recipes expose sections through `recipe.sections[name]` and
+`recipe.<name>`; serialization stores them under `sections`, retaining unknown
+sections. Missing registered sections receive defaults. The demo tint section
+is registered by its pass and its control appears only when `CAKE_DEV=1` at
+process startup. Old top-level `demo_tint` values migrate to `amount`.
+
+## Landmark regions and face landmarks
+
+Register an analysis-resolution mask generator with `@register_region(name)` in
+`cake.analysis.regions`. It receives a list of `(478, 2)` float32 pixel landmark
+arrays and `(height, width)`, and returns a float32 mask in `[0, 1]`. Import the
+module that registers it before analysis begins. `run_models` computes every
+region on each frame and carries the names and uint8 `(height, width, count)`
+stack through `Raw` and `FaceInputs`. Process jobs receive the registered
+functions explicitly, so they work with spawned workers when the functions
+are importable Python module functions. Empty registries carry no stack.
+
+The `regions` face-stage pass at order 210 owns region textures. It packs four
+regions per RGBA texture at analysis resolution and applies the same temporal
+EMA alpha and scene-cut reset as `maskbuild`. It ping-pongs textures so a draw
+never samples its own target. Frame passes use
+`frame_ctx.region(name) -> (texture, channel)` or the
+`frame_ctx.textures['region:' + name]` slot. With no registered regions, this
+stage allocates no textures.
+
+`frame_ctx.face.landmarks` contains one smoothed `(478, 2)` array per face in
+output pixel coordinates; `landmarks_norm` contains the corresponding `[0, 1]`
+coordinates. A nearest bounding-box-centre tracker associates faces between
+frames. Per-face One Euro filters use `LANDMARK_MIN_CUTOFF` and `LANDMARK_BETA`
+from `cake/core/config.py` and reset on scene cuts or lost faces. Region masks
+are generated from the raw analysis landmarks, before this smoothing.
+
+## Parallel worktrees
+
+Read `docs/CODEX_PARALLEL_RULES.md` and the assigned task file. The integrator
+creates an isolated branch/worktree with `tools/new_worktree.ps1 NAME`; each
+stream edits only its assigned files inside its own worktree. `samples/` and
+`models/` junctions are shared and read-only. Streams leave changes uncommitted
+for the integrator and run `python tests/run_unit.py`,
+`python tools/golden.py check`, and their feature tests. The integrator runs
+the full regression and benchmarks after merge.

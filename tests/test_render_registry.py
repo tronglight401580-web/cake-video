@@ -40,7 +40,7 @@ def test_demo_tint_enable_and_restore():
         frame = bytes([120, 160, 190] * 16)
         renderer.apply_recipe(Recipe(style='none'))
         baseline = renderer.render(frame, 0)
-        renderer.apply_recipe(Recipe(style='none', demo_tint=1))
+        renderer.apply_recipe(Recipe(style='none', sections={'demo_tint': {'amount': 1}}))
         assert renderer.render(frame, 0) != baseline
         renderer.apply_recipe(Recipe(style='none'))
         assert renderer.render(frame, 0) == baseline

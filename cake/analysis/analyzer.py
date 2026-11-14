@@ -11,6 +11,7 @@ from .models import _models, _tls, close_models
 from .segment import _gpu_segmenter, _segment
 from .frames import to_small
 from .layers import landmark_layers
+from .regions import compute_regions, registered_regions
 
 @dataclass
 class Raw:
@@ -20,6 +21,9 @@ class Raw:
     face_h: float
     boxes: list
     thumb: np.ndarray | None  # tiny skin map, for scene-cut detection on key frames
+    landmarks: list | None = None
+    region_names: tuple = ()
+    regions: np.ndarray | None = None
 
 
 @dataclass
@@ -32,9 +36,15 @@ class FaceInputs:
     face_h: float
     boxes: list
     reset: bool             # scene cut / first frame: don't blend with the previous mask
+    landmarks: list | None = None
+    region_names: tuple = ()
+    regions: np.ndarray | None = None
+    landmarks_norm: list | None = None
+    dt: float = 1.0 / 30.0
 
 
-def run_models(small: np.ndarray, do_seg: bool = True, ts_ms: int = 0) -> Raw:
+def run_models(small: np.ndarray, do_seg: bool = True, ts_ms: int = 0,
+               region_defs=None) -> Raw:
     """Worker-thread part: model calls + drawing the landmark layers (all the CPU-heavy work)."""
     import mediapipe as mp
     seg_task, lmk = _models()
@@ -45,21 +55,23 @@ def run_models(small: np.ndarray, do_seg: bool = True, ts_ms: int = 0) -> Raw:
     faces = [np.array([[q.x * w, q.y * h] for q in pts], np.float32)
              for pts in lmk.detect_for_video(img, _tls.ts).face_landmarks]
     layers, face_h, boxes = landmark_layers(faces, (h, w))
+    region_names, regions = compute_regions(faces, (h, w), region_defs)
     thumb = None
     if seg is not None:
         thumb = cv2.resize(seg, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
-    return Raw(seg, layers, face_h, boxes, thumb)
+    return Raw(seg, layers, face_h, boxes, thumb, faces, region_names, regions)
 
 
 def analyze(small: np.ndarray) -> FaceInputs:
     """Single still frame (no temporal context)."""
     raw = run_models(small, True)
-    return FaceInputs(raw.seg, raw.seg, 0.0, raw.layers, raw.face_h, raw.boxes, True)
+    return FaceInputs(raw.seg, raw.seg, 0.0, raw.layers, raw.face_h, raw.boxes, True,
+                      raw.landmarks, raw.region_names, raw.regions)
 
 
-def _proc_task(small: np.ndarray, do_seg: bool, ts: int) -> Raw:
+def _proc_task(small: np.ndarray, do_seg: bool, ts: int, region_defs) -> Raw:
     """Process-pool entry point (must be top level to be picklable)."""
-    return run_models(small, do_seg, ts)
+    return run_models(small, do_seg, ts, region_defs)
 
 
 def _proc_warm(_i: int) -> int:
@@ -108,7 +120,8 @@ class Analyzer:
         do_seg = index % self.seg_every == 0
         ts = getattr(self, "_ts_base", 0) + int(index * self.frame_ms)
         if self.mode == "process":
-            fut = self.pool.submit(_proc_task, to_small(frame, w, h, high_bit, yuv), do_seg, ts)
+            fut = self.pool.submit(_proc_task, to_small(frame, w, h, high_bit, yuv),
+                                   do_seg, ts, registered_regions())
         else:
             fut = self.pool.submit(lambda: run_models(to_small(frame, w, h, high_bit, yuv), do_seg, ts))
         with self._cv:
@@ -167,7 +180,9 @@ class Analyzer:
         if raw.face_h > 0:
             self.face_h = raw.face_h if self.face_h == 0 or reset else \
                 self.face_h + (raw.face_h - self.face_h) * 0.2
-        return FaceInputs(seg_a, seg_b, t, raw.layers, self.face_h, raw.boxes, reset)
+        return FaceInputs(seg_a, seg_b, t, raw.layers, self.face_h, raw.boxes, reset,
+                          raw.landmarks, raw.region_names, raw.regions,
+                          dt=self.frame_ms / 1000.0)
 
     def close(self):
         self.pool.shutdown(wait=True, cancel_futures=True)
