@@ -2,23 +2,25 @@
 from dataclasses import asdict, dataclass, field
 import math
 
-def meta(label, default, low=None, high=None, step=None):
-    return {'label': label, 'default': default, 'range': (low, high), 'step': step}
+def meta(label, default, low=None, high=None, step=None, ui=None, preview_only=False):
+    return {'label': label, 'default': default, 'range': (low, high),
+            'min': low, 'max': high, 'step': step, 'ui': ui,
+            'preview_only': preview_only}
 
 @dataclass
 class RetouchCfg:
-    level: float = field(default=.5, metadata=meta('磨皮', .5, 0, 1, .01))
-    spots: float | None = field(default=None, metadata=meta('祛痘淡斑', None, 0, 1, .01))
-    eyes: float | None = field(default=None, metadata=meta('黑眼圈', None, 0, 1, .01))
-    keep_moles: bool = field(default=True, metadata=meta('保留痣', True))
-    debug: bool = field(default=False, metadata=meta('标记检测结果', False))
+    level: float = field(default=.5, metadata=meta('磨皮', .5, 0, 1, .01, '人像精修'))
+    spots: float | None = field(default=None, metadata=meta('祛痘淡斑', None, 0, 1, .01, '人像精修'))
+    eyes: float | None = field(default=None, metadata=meta('黑眼圈', None, 0, 1, .01, '人像精修'))
+    keep_moles: bool = field(default=True, metadata=meta('保留痣', True, ui='人像精修'))
+    debug: bool = field(default=False, metadata=meta('标记检测结果', False, ui='人像精修', preview_only=True))
 
 @dataclass
 class Recipe:
-    style: str = field(default='none', metadata=meta('风格', 'none'))
-    strength: float = field(default=1., metadata=meta('强度', 1., 0, 1.5, .01))
+    style: str = field(default='none', metadata=meta('风格', 'none', ui='风格'))
+    strength: float = field(default=1., metadata=meta('强度', 1., 0, 1.5, .01, '风格'))
     retouch: RetouchCfg = field(default_factory=RetouchCfg, metadata=meta('精修', None))
-    skin_protect_scale: float = field(default=1., metadata=meta('肤色保护', 1., 0, 1.25, .01))
+    skin_protect_scale: float = field(default=1., metadata=meta('肤色保护', 1., 0, 1.25, .01, '风格'))
     version: int = field(default=1, metadata=meta('版本', 1))
 
     def to_dict(self):
@@ -27,7 +29,10 @@ class Recipe:
     @classmethod
     def from_dict(cls, data):
         data = dict(data)
+        if not isinstance(data.get('retouch', {}), dict):
+            return cls.from_legacy(data)
         data['retouch'] = RetouchCfg(**data.get('retouch', {}))
+        data.setdefault('version', 1)
         obj = cls(**data)
         obj.validate()
         return obj
@@ -60,3 +65,9 @@ class Recipe:
         if not isinstance(self.retouch.keep_moles, bool) or not isinstance(self.retouch.debug, bool):
             raise ValueError('retouch flags must be boolean')
         return self
+
+    def for_export(self):
+        """Return an independent copy without preview-only controls."""
+        data = self.to_dict()
+        data['retouch']['debug'] = False
+        return type(self).from_dict(data)

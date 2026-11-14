@@ -109,7 +109,7 @@ class Finish(Pass):
             self.use_stamp = 0.0
 
     def run(self, fc):
-        st, t, u = fc.recipe, fc.textures, fc.uniforms
+        st, t, u = fc.style, fc.textures, fc.uniforms
         (self.fb_out16 if fc.yuv else self.fb_out).use()
         t['graded'].use(0); t.get('bloom', self.zero_bloom).use(1); self.stamp.use(2)
         self.gl.uniforms(self.program, graded=0, bloom=1, stamp=2,

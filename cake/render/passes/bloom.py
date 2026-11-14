@@ -45,10 +45,10 @@ class Bloom(Pass):
         self.b2, self.fb_b2 = gl.rt((bw, bh))
 
     def enabled(self, recipe, fc):
-        return recipe.bloom_amount > 0
+        return fc.style is not None and fc.style.bloom_amount > 0
 
     def run(self, fc):
-        st, t = fc.recipe, fc.textures
+        st, t = fc.style, fc.textures
         bw, bh = self.bsize
         self.fb_b1.use()
         t['graded'].use(0)

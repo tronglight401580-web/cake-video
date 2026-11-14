@@ -58,7 +58,7 @@ class Grade(Pass):
         self.skin_lut_size = float(sn)
 
     def run(self, fc):
-        u, t, st = fc.uniforms, fc.textures, fc.recipe
+        u, t, st = fc.uniforms, fc.textures, fc.style
         self.fb.use()
         t.get('retouched', t['rgb']).use(0)
         self.lut.use(1); self.skin_lut.use(2)

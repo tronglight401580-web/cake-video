@@ -16,3 +16,7 @@ class FrameContext:
     yuv: bool = False
     pipelined: bool = False
     result: Any = None
+
+    @property
+    def style(self):
+        return self.uniforms.get('style')

@@ -33,3 +33,8 @@ ARCHITECTURE.md). Keep user-facing usage text.
 golden check · tests/run_unit.py · tools/test_ui.py · tools/run_all_tests.py (to completion) ·
 tools/test_refcolor.py · tools/bench_speed.py samples/street_mixed_1227.mp4 (fps).
 Final message < 30 lines.
+
+## 5. Two small UI fixes found in the 2b review (keep golden identical)
+- The "肤色保护" slider must be disabled (greyed) when the selected style has no skin LUT, enabled
+  for reference styles (as the original spec said). Add an assert for this to tests/ (offscreen).
+- Queue items: elide long file names (no horizontal scrollbar in the queue list).

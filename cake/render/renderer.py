@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..core.registry import registered_passes
+from ..core.recipe import Recipe, RetouchCfg
 from .context import RenderContext
 from .frame import FrameContext
 from . import passes  # noqa: F401 - imports register built-in stages
@@ -32,6 +33,8 @@ class Renderer:
         self.style = None
         self.strength = 1.0
         self._face = None
+        self._stamp_rgba = None
+        self.recipe = Recipe()
 
     @staticmethod
     def _set(program, **values):
@@ -39,6 +42,8 @@ class Renderer:
 
     def set_style(self, style, strength: float = 1.0, stamp_rgba=None):
         self.style, self.strength = style, float(strength)
+        self._stamp_rgba = stamp_rgba
+        self.recipe.style, self.recipe.strength = style.name, self.strength
         self._by_name['grade'].set_style(style)
         self._by_name['finish'].set_stamp(stamp_rgba)
 
@@ -48,6 +53,19 @@ class Renderer:
         self.spots, self.under = spots, under
         self.mole_keep = 1.0 if keep_moles else 0.0
         self.debug = 1.0 if debug else 0.0
+        self.recipe.retouch = RetouchCfg(self.retouch, spots, under, keep_moles, debug)
+
+    def apply_recipe(self, recipe: Recipe, stamp_rgba=None):
+        from ..styles import load_style
+        recipe.validate()
+        style_changed = self.style is None or self.style.name != recipe.style
+        self.set_style(self.style if self.style is not None and self.style.name == recipe.style
+                       else load_style(recipe.style), recipe.strength,
+                       stamp_rgba if stamp_rgba is not None else None if style_changed else self._stamp_rgba)
+        r = recipe.retouch
+        self.set_retouch(r.level, r.spots, r.eyes, r.keep_moles, r.debug)
+        self.skin_protect_scale = recipe.skin_protect_scale
+        self.recipe = Recipe.from_dict(recipe.to_dict())
 
     def _uniforms(self):
         return dict(scale=self.scale, mask_alpha=self.mask_alpha, skin_protect_scale=self.skin_protect_scale,
@@ -57,8 +75,8 @@ class Renderer:
 
     def set_face(self, fi):
         self._face = fi
-        fc = FrameContext(self.style, 0, self.w, self.h, face=fi,
-                          uniforms=self._uniforms())
+        fc = FrameContext(self.recipe, 0, self.w, self.h, face=fi,
+                          uniforms={**self._uniforms(), 'style': self.style})
         for p in self._passes:
             if getattr(p, 'stage', 'frame') == 'face' and p.enabled(fc.recipe, fc):
                 p.run(fc)
@@ -72,8 +90,8 @@ class Renderer:
             slots['mask'] = self.mask
         if self.skin is not None:
             slots['skin'] = self.skin
-        fc = FrameContext(self.style, index, self.w, self.h, face=self._face,
-                          textures=slots, uniforms=self._uniforms(), frame=frame,
+        fc = FrameContext(self.recipe, index, self.w, self.h, face=self._face,
+                          textures=slots, uniforms={**self._uniforms(), 'style': self.style}, frame=frame,
                           yuv=yuv, pipelined=pipelined)
         for p in self._passes:
             if getattr(p, 'stage', 'frame') == 'frame' and p.enabled(fc.recipe, fc):

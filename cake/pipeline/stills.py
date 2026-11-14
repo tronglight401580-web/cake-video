@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from ..core.config import CAKE_YUV
 from ..core.bus import bus
+from ..core.recipe import Recipe, RetouchCfg
 from ..styles import Style, render_stamp
 from ..probe import ClipInfo
 from . import _deps
@@ -24,19 +25,25 @@ def _to_u8(frame: bytes, w: int, h: int, high_bit: bool) -> np.ndarray:
 
 def compare_still(inp: str, out_png: str, styles: list[Style], t: float = 1.0,
                   strength: float = 1.0, max_short: int | None = 1080,
-                  thumb_w: int = 540, tonemap: str = "mobius", retouch: float = 0.5) -> str:
+                  thumb_w: int = 540, tonemap: str = "mobius", retouch: float = 0.5,
+                  *, recipe: Recipe | None = None) -> str:
     """Side-by-side contact sheet: original | style1 | style2 ... with labels."""
+    base = recipe or Recipe(style=styles[0].name if styles else 'none', strength=strength,
+                            retouch=RetouchCfg(retouch))
+    base.validate()
     info = _deps().probe(inp)
     w, h = _deps().target_size(info, max_short)
     high_bit = info.high_bit or bool(info.hdr)
     frame = _grab_frame(info, t, w, h, high_bit, tonemap)
     tiles = [("原片", _to_u8(frame, w, h, high_bit))]
-    renderer = _renderer_with_mask(frame, w, h, high_bit, retouch)
+    renderer = _renderer_with_mask(frame, w, h, high_bit, base.retouch.level)
     if renderer.mask is None and any(st.skin_lut and st.skin_protect > 0 for st in styles):
         from ..face import analyze, to_small
         renderer.set_face(analyze(to_small(frame, w, h, high_bit)))
     for st in styles:
-        renderer.set_style(st, strength, render_stamp(st, w, h, inp))
+        r = Recipe.from_dict(base.to_dict())
+        r.style = st.name
+        renderer.apply_recipe(r, render_stamp(st, w, h, inp))
         rgb = np.frombuffer(renderer.render(frame, int(t * 30)), np.uint8).reshape(h, w, 3)
         tiles.append((st.title or st.name, rgb))
     renderer.release()
@@ -56,7 +63,7 @@ def _renderer_with_mask(frame, w, h, high_bit, retouch, opts=None) -> Renderer:
 
 def compare_face(inp: str, out_png: str, style: Style | None, t: float = 1.0,
                  levels=(0.0, 0.5, 1.0), max_short: int | None = 1080, opts: dict | None = None,
-                 tonemap: str = "mobius") -> str:
+                 tonemap: str = "mobius", *, recipe: Recipe | None = None) -> str:
     """Retouch check sheet. Row 1: full frames at each retouch level; row 2: 1:1 face crops."""
     from ..styles import Style as _S
     info = _deps().probe(inp)
@@ -66,12 +73,22 @@ def compare_face(inp: str, out_png: str, style: Style | None, t: float = 1.0,
     st = style or _S(name="none", title="无风格", lut="", lut_strength=0.0)
     full, crops = [], []
     box = None
+    base = recipe or Recipe(style=style.name if style else 'none',
+                            retouch=RetouchCfg(spots=(opts or {}).get('spots'),
+                                               eyes=(opts or {}).get('under'),
+                                               keep_moles=(opts or {}).get('keep_moles', True),
+                                               debug=(opts or {}).get('debug', False)))
     for lv in levels:
         r = _renderer_with_mask(frame, w, h, high_bit, lv, opts)
+        variant = Recipe.from_dict(base.to_dict())
+        variant.retouch.level = lv
         if style is None:
             r.set_style(_identity_style(), 0.0)
+            r.set_retouch(lv, variant.retouch.spots, variant.retouch.eyes,
+                          variant.retouch.keep_moles, variant.retouch.debug)
         else:
-            r.set_style(st, 1.0)
+            variant.style = st.name
+            r.apply_recipe(variant)
         rgb = np.frombuffer(r.render(frame, 0), np.uint8).reshape(h, w, 3)
         if box is None and r.face_boxes:
             box = max(r.face_boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))

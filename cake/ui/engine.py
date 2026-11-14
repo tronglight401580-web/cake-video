@@ -20,6 +20,7 @@ from ..probe import probe
 from ..styles import load_style, render_stamp
 
 from ..core.config import PREVIEW_SHORT, LOOKAHEAD
+from ..core.recipe import Recipe, RetouchCfg
 
 
 @dataclass
@@ -52,6 +53,7 @@ class PreviewEngine(QThread):
         super().__init__()
         self.cmds: queue.Queue = queue.Queue()
         self.params = Params()
+        self.recipe = Recipe(style='film_warm')
 
     # ---------------------------------------------------------------- UI-side API (any thread)
     def load(self, path: str, t: float = 0.0):
@@ -67,7 +69,18 @@ class PreviewEngine(QThread):
         self.cmds.put(("seek", t))
 
     def set_params(self, **kw):
-        self.cmds.put(("params", kw))
+        data = self.recipe.to_dict()
+        for key, value in kw.items():
+            if key in ('retouch', 'spots', 'eyes', 'keep_moles', 'debug'):
+                data['retouch'][{'retouch': 'level'}.get(key, key)] = value
+            elif key in data:
+                data[key] = value
+        self.set_recipe(Recipe.from_dict(data))
+
+    def set_recipe(self, recipe: Recipe):
+        recipe.validate()
+        self.recipe = Recipe.from_dict(recipe.to_dict())
+        self.cmds.put(('recipe', self.recipe))
 
     def step(self, delta: int):
         """Paused: show the next (+1) or previous (-1) frame."""
@@ -152,6 +165,14 @@ class PreviewEngine(QThread):
                 self._show_next()
         elif kind == "params":
             self._apply_params(cmd[1])
+            if not self.playing and self.last is not None:
+                self._render_and_emit(*self.last, reanalyze=False)
+        elif kind == 'recipe':
+            r = cmd[1]
+            self._apply_params(dict(style=r.style, strength=r.strength, retouch=r.retouch.level,
+                                    spots=r.retouch.spots, eyes=r.retouch.eyes,
+                                    keep_moles=r.retouch.keep_moles, debug=r.retouch.debug,
+                                    skin_protect_scale=r.skin_protect_scale))
             if not self.playing and self.last is not None:
                 self._render_and_emit(*self.last, reanalyze=False)
         return True
@@ -240,14 +261,12 @@ class PreviewEngine(QThread):
         p = self.params
         if self.renderer is None:
             return
-        if force_style or p.style != old_style:
-            st = load_style(p.style)
-            self.renderer.set_style(st, p.strength, render_stamp(st, self.w, self.h, self.info.path))
-        else:
-            self.renderer.strength = float(p.strength)   # cheap: just a uniform
-        self.renderer.set_retouch(p.retouch, spots=p.spots, under=p.eyes,
-                                  keep_moles=p.keep_moles, debug=p.debug)
-        self.renderer.skin_protect_scale = p.skin_protect_scale
+        st = load_style(p.style)
+        stamp = render_stamp(st, self.w, self.h, self.info.path) if force_style or p.style != old_style else None
+        self.renderer.apply_recipe(Recipe(style=p.style, strength=p.strength,
+                                          retouch=RetouchCfg(p.retouch, p.spots, p.eyes,
+                                                             p.keep_moles, p.debug),
+                                          skin_protect_scale=p.skin_protect_scale), stamp)
         if (p.retouch > 0 or (self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0)) and self.analyzer is None:
             from ..face import Analyzer
             self.status.emit("正在加载精修模型（首次约 3～6 秒）…")

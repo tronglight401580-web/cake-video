@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from ..core.config import CAKE_YUV
 from ..core.bus import bus
+from ..core.recipe import Recipe, RetouchCfg
 from ..styles import Style, render_stamp
 from ..probe import ClipInfo
 from . import _deps
@@ -24,14 +25,35 @@ def _pump(src_iter, q: queue.Queue, errors: list):
         q.put(_END)
 
 
-def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
+def _configure_renderer(renderer, recipe, style, width, height, source):
+    """Use the same Recipe API as preview, with preview-only flags cleared."""
+    stamp = render_stamp(style, width, height, source)
+    renderer.set_style(style, recipe.strength, stamp)  # accepts transient reference styles
+    renderer.apply_recipe(recipe.for_export(), stamp)
+
+
+def grade_video(inp: str, out: str, style: Style | None = None, strength: float = 1.0,
                 max_short: int | None = 1080, start: float | None = None,
                 duration: float | None = None, encoder: str = "auto",
                 tonemap: str = "mobius", retouch: float = 0.5, retouch_opts: dict | None = None,
-                log=print, analyzer=None, progress=None, cancel=None, skin_protect_scale=1.0) -> dict:
+                log=print, analyzer=None, progress=None, cancel=None, skin_protect_scale=1.0,
+                *, recipe: Recipe | None = None) -> dict:
     # progress(n_done, n_total_or_None) every 10 frames; cancel() -> True aborts the export
     """analyzer: pass a cake.face.Analyzer to reuse its warm worker processes across videos
     (batch mode); otherwise one is created (model start-up ~3-6 s) and closed here."""
+    if recipe is None:
+        if style is None:
+            raise ValueError('style or recipe is required')
+        opts = retouch_opts or {}
+        recipe = Recipe(style=style.name, strength=strength,
+                        retouch=RetouchCfg(retouch, opts.get('spots'), opts.get('under', opts.get('eyes')),
+                                           opts.get('keep_moles', True)),
+                        skin_protect_scale=skin_protect_scale)
+    recipe = recipe.for_export()
+    if style is None or style.name != recipe.style:
+        from ..styles import load_style
+        style = load_style(recipe.style)
+    strength, retouch = recipe.strength, recipe.retouch.level
     old_log, old_progress = log, progress
     def log(message):
         bus.publish('log', message=message)
@@ -64,9 +86,7 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
     # slower on 720p -> opt-in via CAKE_YUV=1
     yuv = _deps().source_matrix(info) if (CAKE_YUV and _deps().yuv_capable(info, high_bit)) else None
     renderer = _deps().Renderer(w, h, high_bit, yuv)
-    renderer.set_style(style, strength, render_stamp(style, w, h, inp))
-    renderer.skin_protect_scale = skin_protect_scale
-    renderer.set_retouch(retouch, **(retouch_opts or {}))
+    _configure_renderer(renderer, recipe, style, w, h, inp)
     dec = _deps().Decoder(info, w, h, high_bit, start, duration, tonemap=tonemap, yuv=yuv is not None)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     enc = _deps().Encoder(info, out, w, h, info.fps, encoder, start, duration)
