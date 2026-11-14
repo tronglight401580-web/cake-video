@@ -24,7 +24,7 @@ import threading
 
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 
-from ..styles import list_styles
+from ..styles import list_styles, load_style
 from .engine import PreviewEngine
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi"}
@@ -151,6 +151,23 @@ class PreviewView(QWidget):
             self._drag(e.position().x())
 
 
+class ReferenceWorker(QThread):
+    ready = Signal(str, str)
+    failed = Signal(str)
+
+    def __init__(self, ref, clip):
+        super().__init__()
+        self.ref, self.clip = ref, clip
+
+    def run(self):
+        try:
+            from ..refcolor import build_reference_style
+            st = build_reference_style(self.ref, [self.clip])
+            self.ready.emit(st.name, st.title)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 # --------------------------------------------------------------------------- export worker
 class ExportWorker(QThread):
     item_started = Signal(int, str)
@@ -174,7 +191,7 @@ class ExportWorker(QThread):
         ok = 0
         t0 = time.perf_counter()
         try:
-            if any(s["retouch"] > 0 for _, _, s in self.jobs):
+            if any(s["retouch"] > 0 or (load_style(s["style"]).skin_lut and load_style(s["style"]).skin_protect > 0) for _, _, s in self.jobs):
                 from ..face import Analyzer
                 analyzer = Analyzer()             # one warm pool for the whole batch
             for row, path, s in self.jobs:
@@ -186,7 +203,7 @@ class ExportWorker(QThread):
                 try:
                     grade_video(path, out, st, s["strength"], retouch=s["retouch"],
                                 retouch_opts={**s["opts"], "debug": False}, log=lambda *a: None,
-                                analyzer=analyzer if s["retouch"] > 0 else None,
+                                analyzer=analyzer, skin_protect_scale=s.get("skin_protect", .8) / .8,
                                 progress=lambda n, tot, r=row: self.item_progress.emit(r, n, tot or 0),
                                 cancel=lambda: self._cancel)
                     ok += 1
@@ -332,6 +349,18 @@ class MainWindow(QMainWindow):
         self.strength = _slider(0, 150, 100)
         self.strength_lbl = QLabel()
         f.addRow("风格", self.style_box)
+        self.ref_thumb = QLabel()
+        f.addRow(self.ref_thumb)
+        self.ref_button = QPushButton("\u53c2\u8003\u56fe\u8ffd\u8272")
+        self.ref_button.clicked.connect(self._choose_reference)
+        f.addRow(self.ref_button)
+        self.skin_protect = _slider(0, 100, 80)
+        self.skin_lbl = QLabel()
+        f.addRow(self._labeled("\u80a4\u8272\u4fdd\u62a4", self.skin_protect, self.skin_lbl))
+        self.style_box.currentIndexChanged.connect(self._style_changed)
+        self.skin_protect.valueChanged.connect(self.param_timer.start)
+        self.skin_protect.valueChanged.connect(self._update_labels)
+        self._style_changed()
         f.addRow(self._labeled("强度", self.strength, self.strength_lbl))
         v.addWidget(g)
 
@@ -416,6 +445,37 @@ class MainWindow(QMainWindow):
         return w
 
     # ---------------------------------------------------------------- params
+    def _choose_reference(self):
+        item = self.queue.currentItem()
+        if item is None:
+            self.statusBar().showMessage("\u8bf7\u5148\u9009\u62e9\u89c6\u9891")
+            return
+        ref, _ = QFileDialog.getOpenFileName(self, "\u9009\u62e9\u53c2\u8003\u56fe", "", "\u56fe\u7247 (*.jpg *.jpeg *.png *.webp *.bmp)")
+        if not ref:
+            return
+        self.ref_button.setEnabled(False)
+        self.statusBar().showMessage("\u6b63\u5728\u751f\u6210\u53c2\u8003\u56fe\u98ce\u683c...")
+        self.ref_worker = ReferenceWorker(ref, item.data(ROLE_PATH))
+        self.ref_worker.ready.connect(self._reference_ready)
+        self.ref_worker.failed.connect(lambda err: self.statusBar().showMessage("\u751f\u6210\u5931\u8d25: " + err))
+        self.ref_worker.finished.connect(lambda: self.ref_button.setEnabled(True))
+        self.ref_worker.start()
+
+    def _reference_ready(self, name, title):
+        idx = self.style_box.findData(name)
+        if idx < 0:
+            self.style_box.addItem(title, name)
+            idx = self.style_box.findData(name)
+        self.style_box.setCurrentIndex(idx)
+        self._style_changed()
+        self.statusBar().showMessage("\u53c2\u8003\u56fe\u98ce\u683c\u5df2\u751f\u6210")
+
+    def _style_changed(self):
+        st = load_style(self.style_box.currentData())
+        self.skin_protect.setEnabled(bool(st.skin_lut))
+        pix = QPixmap(st.reference) if st.reference else QPixmap()
+        self.ref_thumb.setPixmap(pix.scaled(160, 90, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
     def _follow_retouch(self, v: int):
         r = v / 100
         if not self.spots_touched:
@@ -424,6 +484,7 @@ class MainWindow(QMainWindow):
             self.eyes.setValue(round(min(0.8, 0.9 * r) * 100))
 
     def _update_labels(self):
+        self.skin_lbl.setText(f"{self.skin_protect.value()}%")
         self.strength_lbl.setText(f"{self.strength.value()}%")
         self.retouch_lbl.setText(str(self.retouch.value()))
         self.spots_lbl.setText(str(self.spots.value()))
@@ -431,6 +492,7 @@ class MainWindow(QMainWindow):
 
     def settings(self) -> dict:
         return {"style": self.style_box.currentData(), "strength": self.strength.value() / 100,
+                "skin_protect": self.skin_protect.value() / 100,
                 "retouch": self.retouch.value() / 100,
                 "opts": {"spots": self.spots.value() / 100, "under": self.eyes.value() / 100,
                          "keep_moles": self.keep_moles.isChecked(), "debug": False}}
@@ -438,7 +500,7 @@ class MainWindow(QMainWindow):
     def _send_params(self):
         s = self.settings()
         self.engine.set_params(style=s["style"], strength=s["strength"], retouch=s["retouch"],
-                               spots=s["opts"]["spots"], eyes=s["opts"]["under"],
+                               skin_protect_scale=s["skin_protect"] / .8, spots=s["opts"]["spots"], eyes=s["opts"]["under"],
                                keep_moles=s["opts"]["keep_moles"], debug=self.debug.isChecked())
         it = self.queue.currentItem()
         if it is not None and not self._applying:
@@ -451,6 +513,7 @@ class MainWindow(QMainWindow):
             self.style_box.setCurrentIndex(max(0, self.style_box.findData(s["style"])))
             self.strength.setValue(round(s["strength"] * 100))
             self.retouch.setValue(round(s["retouch"] * 100))
+            self.skin_protect.setValue(round(s.get("skin_protect", .8) * 100))
             self.spots.setValue(round(s["opts"]["spots"] * 100))
             self.eyes.setValue(round(s["opts"]["under"] * 100))
             self.keep_moles.setChecked(s["opts"]["keep_moles"])

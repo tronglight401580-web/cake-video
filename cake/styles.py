@@ -22,6 +22,9 @@ class Style:
     name: str
     title: str = ""
     lut: str = ""                 # file in luts/ or absolute path to any .cube
+    skin_lut: str = ""
+    skin_protect: float = 0.0
+    reference: str = ""
     lut_strength: float = 1.0
     bloom_amount: float = 0.0
     bloom_threshold: float = 0.7
@@ -43,6 +46,12 @@ class Style:
             p = LUT_DIR / p
         if not p.exists():
             raise FileNotFoundError(f"LUT not found: {p}  (run: python -m cake build-luts)")
+        return _read_cube_cached(str(p), p.stat().st_mtime_ns)
+
+    def load_skin_lut(self) -> np.ndarray:
+        p = Path(self.skin_lut)
+        if not p.is_absolute():
+            p = LUT_DIR / p
         return _read_cube_cached(str(p), p.stat().st_mtime_ns)
 
 

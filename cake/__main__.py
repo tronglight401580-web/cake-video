@@ -45,7 +45,9 @@ def main(argv=None) -> int:
     g = sub.add_parser("grade", help="给视频调色（可批量：多个文件或文件夹）")
     g.add_argument("input", nargs="+", help="视频文件或文件夹，可多个")
     g.add_argument("-o", "--output", help="单个文件：输出文件路径；批量：输出文件夹")
-    g.add_argument("-s", "--style", required=True, help="风格名，或 .json / .cube 路径")
+    g.add_argument("-s", "--style", help="风格名，或 .json / .cube 路径")
+    g.add_argument("--ref", help="reference photo")
+    g.add_argument("--method", choices=("grade", "mkl"), default="grade")
     g.add_argument("--start", type=float)
     g.add_argument("--duration", type=float)
     g.add_argument("--encoder", default="auto", choices=["auto", "nvenc", "mf", "hevc", "x264"],
@@ -69,6 +71,13 @@ def main(argv=None) -> int:
     fc.add_argument("--debug", action="store_true", help="标出检测结果：红=痘/斑，蓝=黑眼圈区域")
     retouch_args(fc)
 
+    rs = sub.add_parser("refstyle", help="Build a reference-photo style")
+    rs.add_argument("reference")
+    rs.add_argument("clips", nargs="+")
+    rs.add_argument("--name")
+    rs.add_argument("--skin-follow", type=float, default=.2)
+    rs.add_argument("--method", choices=("grade", "mkl"), default="grade")
+
     sub.add_parser("styles", help="列出风格")
     p = sub.add_parser("probe", help="查看视频参数")
     p.add_argument("input")
@@ -76,6 +85,10 @@ def main(argv=None) -> int:
 
     a = ap.parse_args(argv)
 
+    if a.cmd == "refstyle":
+        from .refcolor import build_reference_style
+        print(build_reference_style(a.reference, a.clips, a.name, a.skin_follow, method=a.method).name)
+        return 0
     if a.cmd == "build-luts":
         from .looks import build_luts
         for path in build_luts(LUT_DIR):
@@ -119,7 +132,6 @@ VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi"}
 def _grade(a, max_short, opts) -> int:
     import time
     from .pipeline import grade_video
-    st = load_style(a.style)
     files = []
     for x in a.input:
         p = Path(x)
@@ -130,6 +142,13 @@ def _grade(a, max_short, opts) -> int:
     if not files:
         print("没有找到视频文件")
         return 1
+    if a.ref:
+        from .refcolor import build_reference_style
+        st = build_reference_style(a.ref, [str(f) for f in files], method=a.method)
+    elif a.style:
+        st = load_style(a.style)
+    else:
+        raise ValueError("grade requires --style or --ref")
     if len(files) == 1:
         f = files[0]
         out = a.output or str(f.with_name(f"{f.stem}_{st.name}.mp4"))
@@ -141,7 +160,7 @@ def _grade(a, max_short, opts) -> int:
     out_dir = Path(a.output) if a.output else files[0].parent / "cake_out"
     out_dir.mkdir(parents=True, exist_ok=True)
     analyzer = None
-    if a.retouch > 0:
+    if a.retouch > 0 or (st.skin_lut and st.skin_protect > 0):
         from .face import Analyzer
         analyzer = Analyzer()
     failed = []

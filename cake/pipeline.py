@@ -35,17 +35,18 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
                 max_short: int | None = 1080, start: float | None = None,
                 duration: float | None = None, encoder: str = "auto",
                 tonemap: str = "mobius", retouch: float = 0.5, retouch_opts: dict | None = None,
-                log=print, analyzer=None, progress=None, cancel=None) -> dict:
+                log=print, analyzer=None, progress=None, cancel=None, skin_protect_scale=1.0) -> dict:
     # progress(n_done, n_total_or_None) every 10 frames; cancel() -> True aborts the export
     """analyzer: pass a cake.face.Analyzer to reuse its warm worker processes across videos
     (batch mode); otherwise one is created (model start-up ~3-6 s) and closed here."""
     info = probe(inp)
     own_analyzer = False
-    if retouch > 0 and analyzer is None:
+    needs_analysis = retouch > 0 or bool(style.skin_lut and style.skin_protect > 0)
+    if needs_analysis and analyzer is None:
         from .face import Analyzer
         analyzer = Analyzer(fps=float(info.fps))     # start loading models first: overlaps
         own_analyzer = True                          # with GL / encoder / decoder start-up
-    elif retouch <= 0:
+    elif not needs_analysis:
         analyzer = None
     if analyzer is not None:
         analyzer.reset(fps=float(info.fps))
@@ -61,6 +62,7 @@ def grade_video(inp: str, out: str, style: Style, strength: float = 1.0,
     yuv = source_matrix(info) if (os.environ.get("CAKE_YUV") == "1" and yuv_capable(info, high_bit)) else None
     renderer = Renderer(w, h, high_bit, yuv)
     renderer.set_style(style, strength, render_stamp(style, w, h, inp))
+    renderer.skin_protect_scale = skin_protect_scale
     renderer.set_retouch(retouch, **(retouch_opts or {}))
     dec = Decoder(info, w, h, high_bit, start, duration, tonemap=tonemap, yuv=yuv is not None)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +174,9 @@ def compare_still(inp: str, out_png: str, styles: list[Style], t: float = 1.0,
     frame = _grab_frame(info, t, w, h, high_bit, tonemap)
     tiles = [("原片", _to_u8(frame, w, h, high_bit))]
     renderer = _renderer_with_mask(frame, w, h, high_bit, retouch)
+    if renderer.mask is None and any(st.skin_lut and st.skin_protect > 0 for st in styles):
+        from .face import analyze, to_small
+        renderer.set_face(analyze(to_small(frame, w, h, high_bit)))
     for st in styles:
         renderer.set_style(st, strength, render_stamp(st, w, h, inp))
         rgb = np.frombuffer(renderer.render(frame, int(t * 30)), np.uint8).reshape(h, w, 3)

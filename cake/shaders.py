@@ -50,11 +50,12 @@ void main() {
 # Mask assembly + temporal EMA, at analysis resolution (was ~30 ms/frame of numpy on the CPU).
 # segA/segB: face-skin / body-skin of the two neighbouring segmentation key frames, interpolated
 # by t. layers: R eyes/brows/lips cut-out, G nostril cut-out, B under-eye band, A offset*8.
-MASKBUILD = COMMON + """
+MASKBUILD = COMMON.replace("out vec4 o;", "layout(location = 0) out vec4 o;\nlayout(location = 1) out vec4 o2;") + """
 uniform sampler2D segA;
 uniform sampler2D segB;
 uniform sampler2D layers;
 uniform sampler2D prev;
+uniform sampler2D prev_skin;
 uniform float t;
 uniform float alpha;         // 1 = no history (first frame / scene cut)
 uniform float offs_scale;
@@ -68,6 +69,8 @@ void main() {
     vec4 m = vec4(clamp(smooth_w, 0.0, 1.0), tone, under, L.a / offs_scale);
     // alpha = 1: ignore history entirely (it may be uninitialised memory, even NaN)
     o = (alpha >= 0.999) ? m : mix(texture(prev, uv), m, alpha);
+    vec4 skin = vec4(clamp(face + body, 0.0, 1.0), 0.0, 0.0, 1.0);
+    o2 = (alpha >= 0.999) ? skin : mix(texture(prev_skin, uv), skin, alpha);
 }
 """
 
@@ -228,11 +231,17 @@ GRADE = COMMON + """
 uniform sampler2D src;
 uniform sampler3D lut;
 uniform float lut_size;
+uniform sampler3D skin_lut;
+uniform float skin_lut_size;
+uniform sampler2D skin_mask;
+uniform float skin_protect;
 uniform float strength;
 void main() {
     vec3 c = clamp(texture(src, uv).rgb, 0.0, 1.0);
     vec3 coord = c * ((lut_size - 1.0) / lut_size) + 0.5 / lut_size;
     vec3 g = texture(lut, coord).rgb;
+    vec3 sc = c * ((skin_lut_size - 1.0) / skin_lut_size) + 0.5 / skin_lut_size;
+    g = mix(g, texture(skin_lut, sc).rgb, clamp(texture(skin_mask, uv).r * skin_protect, 0.0, 1.0));
     o = vec4(mix(c, g, strength), 1.0);
 }
 """

@@ -69,6 +69,10 @@ class Renderer:
         self.h2, self.fb_h2 = rt((hw, hh))
         self.hmed, self.fb_hmed = rt((hw, hh))
         self.hbase, self.fb_hbase = rt((hw, hh))
+        self.skin = None
+        self.skin_protect_scale = 1.0
+        self._zero_skin = ctx.texture((1, 1), 1, data=bytes(1))
+        self.skin_lut = None
         self.mask = None           # current assembled mask (RGBA16F, analysis resolution)
         self._mask_rt = None       # [(tex, fb), (tex, fb)] ping-pong for the temporal EMA
         self._seg_cache: list = [] # [(numpy array, texture)] - key frames are uploaded once
@@ -110,6 +114,15 @@ class Renderer:
         self.lut.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.lut.repeat_x = self.lut.repeat_y = self.lut.repeat_z = False
         self.lut_size = float(n)
+        from .cube import identity
+        sl = style.load_skin_lut() if style.skin_lut else identity(2).astype("f4")
+        sn = sl.shape[0]
+        if self.skin_lut is not None:
+            self.skin_lut.release()
+        self.skin_lut = self.ctx.texture3d((sn, sn, sn), 3, data=np.ascontiguousarray(sl, "f4").tobytes(), dtype="f4")
+        self.skin_lut.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.skin_lut.repeat_x = self.skin_lut.repeat_y = self.skin_lut.repeat_z = False
+        self.skin_lut_size = float(sn)
         if stamp_rgba is not None:
             self.stamp.release()
             self.stamp = self.ctx.texture((self.w, self.h), 4, data=stamp_rgba.tobytes(), alignment=1)
@@ -149,16 +162,21 @@ class Renderer:
         from .face import OFFS_SCALE
         h, w = fi.layers.shape[:2]
         if self._mask_rt is None or self._mask_rt[0][0].size != (w, h):
-            for tex, fb in self._mask_rt or []:
+            for tex, skin, fb in self._mask_rt or []:
                 fb.release()
                 tex.release()
+                skin.release()
             self._mask_rt = []
             for _ in range(2):
                 tex = self.ctx.texture((w, h), 4, dtype="f2")
                 tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
                 tex.repeat_x = tex.repeat_y = False
-                self._mask_rt.append((tex, self.ctx.framebuffer(color_attachments=[tex])))
+                skin = self.ctx.texture((w, h), 4, dtype="f2")
+                skin.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                skin.repeat_x = skin.repeat_y = False
+                self._mask_rt.append((tex, skin, self.ctx.framebuffer(color_attachments=[tex, skin])))
             self.mask = None
+            self.skin = None
             if self._layers is not None:
                 self._layers.release()
             self._layers = self._u8_tex(fi.layers)
@@ -166,18 +184,20 @@ class Renderer:
             self._layers.write(np.ascontiguousarray(fi.layers).tobytes())
         ta, tb = self._seg_tex(fi.seg_a), self._seg_tex(fi.seg_b)
         cur = 0 if self.mask is self._mask_rt[0][0] else 1
-        dst_tex, dst_fb = self._mask_rt[1 - cur]
+        dst_tex, dst_skin, dst_fb = self._mask_rt[1 - cur]
         prev = self._mask_rt[cur][0]          # never sample the texture being rendered into
         dst_fb.use()
         ta.use(0)
         tb.use(1)
         self._layers.use(2)
         prev.use(3)
+        self._mask_rt[cur][1].use(4)
         alpha = 1.0 if (fi.reset or self.mask is None) else self.mask_alpha
-        self._set(self.p_maskbuild, segA=0, segB=1, layers=2, prev=3, t=float(fi.t),
+        self._set(self.p_maskbuild, segA=0, segB=1, layers=2, prev=3, prev_skin=4, t=float(fi.t),
                   alpha=alpha, offs_scale=OFFS_SCALE)
         self.va_maskbuild.render(moderngl.TRIANGLE_STRIP)
         self.mask = dst_tex
+        self.skin = dst_skin
         self.face_h = fi.face_h
         self.face_boxes = fi.boxes
 
@@ -280,7 +300,11 @@ class Renderer:
         self.fb_graded.use()
         base.use(0)
         self.lut.use(1)
-        self._set(self.p_grade, src=0, lut=1, lut_size=self.lut_size,
+        self.skin_lut.use(2)
+        (self.skin if self.skin is not None else self._zero_skin).use(3)
+        self._set(self.p_grade, src=0, lut=1, lut_size=self.lut_size, skin_lut=2,
+                  skin_lut_size=self.skin_lut_size, skin_mask=3,
+                  skin_protect=st.skin_protect * self.skin_protect_scale if st.skin_lut else 0.0,
                   strength=min(1.0, st.lut_strength * self.strength))
         self.va_grade.render(moderngl.TRIANGLE_STRIP)
 

@@ -28,6 +28,7 @@ class Params:
     style: str = "film_warm"
     strength: float = 1.0
     retouch: float = 0.5
+    skin_protect_scale: float = 1.0
     spots: float | None = None
     eyes: float | None = None
     keep_moles: bool = True
@@ -231,7 +232,7 @@ class PreviewEngine(QThread):
 
     # ---------------------------------------------------------------- rendering
     def _retouch_on(self) -> bool:
-        return self.params.retouch > 0 and self.analyzer is not None
+        return self.analyzer is not None and (self.params.retouch > 0 or bool(self.renderer and self.renderer.style and self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0))
 
     def _apply_params(self, kw: dict, force_style: bool = False):
         old_style = self.params.style
@@ -247,7 +248,8 @@ class PreviewEngine(QThread):
             self.renderer.strength = float(p.strength)   # cheap: just a uniform
         self.renderer.set_retouch(p.retouch, spots=p.spots, under=p.eyes,
                                   keep_moles=p.keep_moles, debug=p.debug)
-        if p.retouch > 0 and self.analyzer is None:
+        self.renderer.skin_protect_scale = p.skin_protect_scale
+        if (p.retouch > 0 or (self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0)) and self.analyzer is None:
             from ..face import Analyzer
             self.status.emit("正在加载精修模型（首次约 3～6 秒）…")
             self.analyzer = Analyzer(fps=float(self.info.fps))
@@ -265,8 +267,9 @@ class PreviewEngine(QThread):
         t0 = time.perf_counter()
         if self._retouch_on() and reanalyze:
             self.renderer.set_face(self.analyzer.result(idx))
-        elif self.params.retouch <= 0:
+        elif not self._retouch_on():
             self.renderer.mask = None
+            self.renderer.skin = None
         out = self.renderer.render(f, idx)
         ms = (time.perf_counter() - t0) * 1000
         orig = np.frombuffer(f, np.uint16 if self.high_bit else np.uint8).reshape(self.h, self.w, 3)
