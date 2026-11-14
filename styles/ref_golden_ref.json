@@ -1,0 +1,8 @@
+{
+  "title": "追色·golden_ref",
+  "lut": "ref_golden_ref.cube",
+  "skin_lut": "ref_golden_ref_skin.cube",
+  "skin_protect": 1.0,
+  "comment": "Reference photo colour transfer",
+  "reference": "D:\\像素蛋糕视频版\\tools\\results\\golden\\tmpqt2y3wmm\\reference.png"
+}

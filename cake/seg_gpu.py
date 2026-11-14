@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
+from .core.config import SEGMENTATION_MODEL
 
 import cv2
 import numpy as np
 
-MODEL = Path(__file__).resolve().parent.parent / "models" / "selfie_multiclass_256x256.onnx"
+MODEL = SEGMENTATION_MODEL
 
 
 def available() -> bool:
