@@ -1,0 +1,1 @@
+"""Registered OpenGL rendering stages."""
