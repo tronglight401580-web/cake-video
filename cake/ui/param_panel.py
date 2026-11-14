@@ -101,7 +101,11 @@ class ParamPanel:
         self.strength = self._control('strength', specs['strength'], f)
         for name, spec in self.field_specs():
             if name not in self.controls and spec.metadata['ui'] == '风格':
-                self._control(name, spec, f)
+                control = self._control(name, spec, f)
+                control.valueChanged.connect(self.param_timer.start)
+                label = getattr(self, f'{name}_lbl')
+                label.setText(str(control.value()))
+                control.valueChanged.connect(lambda value, label=label: label.setText(str(value)))
         v.addWidget(g)
 
         g = QGroupBox("人像精修")

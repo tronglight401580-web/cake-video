@@ -28,6 +28,8 @@ class QueuePanel:
         v.setContentsMargins(8, 8, 4, 8)
         v.addWidget(QLabel("视频队列"))
         self.queue = QListWidget()
+        self.queue.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.queue.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.queue.currentRowChanged.connect(self._on_select)
         v.addWidget(self.queue, 1)
         row = QHBoxLayout()

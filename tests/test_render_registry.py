@@ -32,3 +32,17 @@ def test_registered_pass_runs_between_bloom_and_finish():
             renderer.release()
     finally:
         _registry.pop('demo_650', None)
+
+def test_demo_tint_enable_and_restore():
+    from cake.core.recipe import Recipe
+    renderer = Renderer(4, 4, False)
+    try:
+        frame = bytes([120, 160, 190] * 16)
+        renderer.apply_recipe(Recipe(style='none'))
+        baseline = renderer.render(frame, 0)
+        renderer.apply_recipe(Recipe(style='none', demo_tint=1))
+        assert renderer.render(frame, 0) != baseline
+        renderer.apply_recipe(Recipe(style='none'))
+        assert renderer.render(frame, 0) == baseline
+    finally:
+        renderer.release()

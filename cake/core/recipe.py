@@ -21,6 +21,7 @@ class Recipe:
     strength: float = field(default=1., metadata=meta('强度', 1., 0, 1.5, .01, '风格'))
     retouch: RetouchCfg = field(default_factory=RetouchCfg, metadata=meta('精修', None))
     skin_protect_scale: float = field(default=1., metadata=meta('肤色保护', 1., 0, 1.25, .01, '风格'))
+    demo_tint: float = field(default=0., metadata=meta('示例色调', 0., 0, 1, .01, '风格'))
     version: int = field(default=1, metadata=meta('版本', 1))
 
     def to_dict(self):
@@ -54,6 +55,7 @@ class Recipe:
         if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
             raise ValueError('invalid recipe version')
         for value, low, high, name in ((self.strength, 0, 1.5, 'strength'),
+                                       (self.demo_tint, 0, 1, 'demo_tint'),
                                        (self.skin_protect_scale, 0, 1.25, 'skin_protect_scale'),
                                        (self.retouch.level, 0, 1, 'level'),
                                        (self.retouch.spots, 0, 1, 'spots'),

@@ -43,7 +43,8 @@ def test_preview_export_renderer_state():
                                   eyes=recipe.retouch.eyes,
                                   keep_moles=recipe.retouch.keep_moles,
                                   debug=recipe.retouch.debug,
-                                  skin_protect_scale=recipe.skin_protect_scale), force_style=True)
+                                  skin_protect_scale=recipe.skin_protect_scale, demo_tint=.6), force_style=True)
+        assert preview.recipe.demo_tint == .6
         _configure_renderer(export, recipe, load_style(recipe.style), 4, 4, 'unused.mp4')
         for key in ('strength', 'retouch', 'spots', 'under', 'mole_keep',
                     'skin_protect_scale'):
@@ -77,4 +78,44 @@ def test_metadata_builds_controls():
     assert set(panel.controls) == {name for name, _ in panel.field_specs(ExtendedRecipe)} - {'style'}
     assert panel.controls['spots'].objectName() == 'spots'
     assert panel.controls['glow'].value() == 20
+    panel.close()
+
+def test_skin_protection_tracks_style_offscreen():
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    from PySide6.QtWidgets import QApplication, QComboBox, QSlider, QLabel, QWidget
+    from unittest.mock import patch
+    from cake.ui.param_panel import ParamPanel
+
+    app = QApplication.instance() or QApplication([])
+    class Panel(ParamPanel, QWidget):
+        pass
+    panel = Panel()
+    panel.style_box = QComboBox()
+    panel.style_box.addItems(['ordinary', 'reference'])
+    panel.skin_protect = QSlider()
+    panel.ref_thumb = QLabel()
+    with patch('cake.ui.param_panel.load_style', side_effect=[SimpleNamespace(skin_lut=None, reference=None),
+                                                              SimpleNamespace(skin_lut='skin.cube', reference=None)]):
+        panel._style_changed()
+        assert not panel.skin_protect.isEnabled()
+        panel.style_box.setCurrentIndex(1)
+        panel._style_changed()
+        assert panel.skin_protect.isEnabled()
+    panel.close()
+
+def test_queue_elides_long_names_offscreen():
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QWidget
+    from cake.ui.queue_panel import QueuePanel
+
+    app = QApplication.instance() or QApplication([])
+    class Panel(QueuePanel, QWidget):
+        def _on_select(self, row):
+            pass
+    panel = Panel()
+    widget = panel._build_queue()
+    assert panel.queue.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert panel.queue.textElideMode() == Qt.TextElideMode.ElideRight
+    widget.close()
     panel.close()

@@ -123,14 +123,7 @@ ffmpeg 解码 ─► 色彩空间归一 ─► GPU: 3D LUT ─► 高光溢出/�
   (强制CFR, 旋转矫正)  (HLG/PQ→SDR mobius, BT.2020→709, 10bit走16bit管线)                          (GPU 转 NV12，硬件编码 MF/NVENC)
 ```
 
-| 文件 | 作用 |
-|---|---|
-| `cake/probe.py` | ffprobe：HDR、位深、旋转、VFR 帧率归整、音频 |
-| `cake/media.py` | 解码到原始 RGB / 原始 RGB 编码；编码器自动检测 |
-| `cake/gpu.py` + `cake/shaders.py` | moderngl 渲染：调色 → 亮部提取 → 模糊 → 合成 |
-| `cake/looks.py` | 用代码生成 LUT 的色彩数学（含肤色保护） |
-| `cake/styles.py` + `styles/*.json` | 风格预设 = LUT + 质感参数 |
-| `tools/platform_sim.py` | 平台压缩模拟（Codex 编写） |
+Code layout: `cake/core`, `io`, `color`, `analysis`, `render/passes`, `pipeline`, `ui`, and `cli.py`. Legacy top-level modules are compatibility shims. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for details. Install with `pip install -r requirements.txt` or `pip install .[ui]`; download models separately using the links above.
 
 ## 内置风格
 - `film_warm` 胶片暖调：Portra 风格，暖色只加在环境和高光上，皮肤单独提亮、保持粉嫩

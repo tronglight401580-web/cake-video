@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixel-cake-video"
+version = "0.1.0"
+description = "GPU video grading and portrait retouching"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy==2.5.2", "moderngl==5.13.0", "glcontext==3.1.0",
+  "opencv-contrib-python==5.0.0.93", "pillow==13.0.0",
+  "mediapipe==1.2.3", "onnxruntime-directml==1.24.4; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+ui = ["PySide6_Essentials==6.12.0"]
+convert = ["tensorflow-cpu", "tf2onnx"]
+
+[project.scripts]
+cake = "cake.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["cake*"]

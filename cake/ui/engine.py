@@ -33,6 +33,7 @@ class Params:
     eyes: float | None = None
     keep_moles: bool = True
     debug: bool = False
+    demo_tint: float = 0.0
     extra: dict = field(default_factory=dict)
 
 
@@ -172,7 +173,7 @@ class PreviewEngine(QThread):
             self._apply_params(dict(style=r.style, strength=r.strength, retouch=r.retouch.level,
                                     spots=r.retouch.spots, eyes=r.retouch.eyes,
                                     keep_moles=r.retouch.keep_moles, debug=r.retouch.debug,
-                                    skin_protect_scale=r.skin_protect_scale))
+                                    skin_protect_scale=r.skin_protect_scale, demo_tint=r.demo_tint))
             if not self.playing and self.last is not None:
                 self._render_and_emit(*self.last, reanalyze=False)
         return True
@@ -266,7 +267,7 @@ class PreviewEngine(QThread):
         self.renderer.apply_recipe(Recipe(style=p.style, strength=p.strength,
                                           retouch=RetouchCfg(p.retouch, p.spots, p.eyes,
                                                              p.keep_moles, p.debug),
-                                          skin_protect_scale=p.skin_protect_scale), stamp)
+                                          skin_protect_scale=p.skin_protect_scale, demo_tint=p.demo_tint), stamp)
         if (p.retouch > 0 or (self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0)) and self.analyzer is None:
             from ..face import Analyzer
             self.status.emit("正在加载精修模型（首次约 3～6 秒）…")
