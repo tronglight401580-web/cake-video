@@ -97,8 +97,42 @@ def _grade_fit(source, reference, grid_lab):
     return out
 
 
+def detect_shots(clip):
+    """Return half-open frame ranges on the decoder's constant-rate timeline."""
+    info = probe(str(clip))
+    w, h = target_size(info, 180)
+    dec = Decoder(info, w, h, False)
+    previous = None
+    cuts = [0]
+    count = 0
+    minimum = max(1, round(float(info.fps) * .5))
+    try:
+        for i, frame in enumerate(dec):
+            count = i + 1
+            if i % 2:
+                continue
+            rgb = np.frombuffer(frame, np.uint8).reshape(h, w, 3)
+            hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+            hist = cv2.calcHist([hsv], [0, 1, 2], None, [12, 4, 4], [0, 180, 0, 256, 0, 256]).ravel()
+            hist /= max(hist.sum(), 1)
+            if previous is not None:
+                distance = .5 * np.sum((hist - previous) ** 2 / (hist + previous + 1e-10))
+                if distance > .45 and i - cuts[-1] >= minimum:
+                    cuts.append(i)
+            previous = hist
+    finally:
+        err = dec.close()
+    if not count:
+        raise RuntimeError(f'Cannot decode {clip}: {err}')
+    if len(cuts) > 1 and count - cuts[-1] < minimum:
+        cuts.pop()
+    return list(zip(cuts, cuts[1:] + [count]))
+
+
 def build_reference_style(ref_image: str, clips: list[str], name: str | None = None,
-                          skin_follow: float = .2, samples_per_clip: int = 8, method: str = "grade"):
+                          skin_follow: float = .2, samples_per_clip: int = 8, method: str = "grade", per_shot: bool = False):
+    if per_shot and (len(clips) != 1 or method != 'grade'):
+        raise ValueError('per-shot fitting requires one clip and method=grade')
     if method not in ('grade', 'mkl'):
         raise ValueError('method must be grade or mkl')
     if not clips or samples_per_clip < 1 or not 0 <= skin_follow <= 1:
@@ -116,6 +150,12 @@ def build_reference_style(ref_image: str, clips: list[str], name: str | None = N
                 frame = next(iter(dec), None)
             finally:
                 err = dec.close()
+            if frame is None and t > 0:
+                dec = Decoder(info, w, h, False, start=max(0, float(t) - 1/float(info.fps)), frames=1)
+                try:
+                    frame = next(iter(dec), None)
+                finally:
+                    err = dec.close()
             if frame is None:
                 raise RuntimeError(f'Cannot decode {path} at {t:.2f}: {err}')
             arr = np.frombuffer(frame,np.uint8).reshape(h,w,3)
@@ -157,5 +197,38 @@ def build_reference_style(ref_image: str, clips: list[str], name: str | None = N
     write_cube(LUT_DIR / (stem+'_skin.cube'), skin_rgb)
     data = {'title':'追色·'+slug,'lut':stem+'.cube','skin_lut':stem+'_skin.cube',
             'skin_protect':1.0,'comment':'Reference photo colour transfer','reference':str(ref_image)}
+    if per_shot:
+        info = probe(str(clips[0])); w, h = target_size(info, 360)
+        data['shots'] = []
+        for k, (start, end) in enumerate(detect_shots(clips[0])):
+            shot_src, shot_skin = [], []
+            for frame_index in np.linspace(start, end - 1, samples_per_clip, dtype=int):
+                t = frame_index / float(info.fps)
+                dec = Decoder(info, w, h, False, start=t, frames=1)
+                try:
+                    frame = next(iter(dec), None)
+                finally:
+                    dec.close()
+                if frame is None:
+                    continue
+                try:
+                    px, sk, _, _ = _sample(np.frombuffer(frame, np.uint8).reshape(h, w, 3), int(t * 1000))
+                except ValueError:
+                    continue
+                shot_src.append(px); shot_skin.append(sk)
+            if shot_src and sum(len(x) for x in shot_src) >= 100:
+                shot_lab = _grade_fit(np.concatenate(shot_src), ref_px, lab)
+                shot_skin_lab = lab + (shot_lab-lab)*np.array([.7,skin_follow,skin_follow])
+                ss = np.concatenate(shot_skin)
+                if (ref_mask >= .3).mean() >= .015 and len(ss):
+                    shot_skin_lab += np.clip((ref_skin.mean(axis=0)-ss.mean(axis=0))*skin_follow, [-6,-4,-4], [6,4,4])
+                shot_rgb = np.clip(soft_clip(lab_to_rgb(shot_lab)), 0, 1)
+                shot_skin_rgb = np.clip(protect_skin(grid, np.clip(soft_clip(lab_to_rgb(shot_skin_lab)), 0, 1), 1), 0, 1)
+            else:
+                shot_rgb, shot_skin_rgb = global_rgb, skin_rgb
+            lut_name, skin_name = f'{stem}_s{k}.cube', f'{stem}_s{k}_skin.cube'
+            write_cube(LUT_DIR / lut_name, shot_rgb)
+            write_cube(LUT_DIR / skin_name, shot_skin_rgb)
+            data['shots'].append(dict(start=start, end=end, lut=lut_name, skin_lut=skin_name))
     (STYLE_DIR / (stem+'.json')).write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
     return load_style(stem)
