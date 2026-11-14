@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListW
     QPushButton, QGroupBox, QFormLayout, QComboBox, QCheckBox, QLineEdit, QProgressBar,
     QFileDialog, QSlider, QMessageBox)
 from ..styles import list_styles, load_style
-from ..core.recipe import Recipe, RetouchCfg
+from ..core.recipe import Recipe, RetouchCfg, section_types
+from ..core import config
 from .presets import load_presets, save_presets
 from .queue_panel import ROLE_PATH, ROLE_SETTINGS, _thumbnail
 
@@ -23,13 +24,18 @@ class ParamPanel:
     @staticmethod
     def field_specs(recipe_type=Recipe):
         """Flatten UI fields from Recipe and its retouch section."""
+        Recipe()  # ensure built-in sections have registered
         for item in fields(recipe_type):
-            if item.metadata.get('ui'):
+            if item.metadata.get('ui') and (config.CAKE_DEV or not item.metadata.get('dev_only')):
                 yield item.name, item
             elif item.name == 'retouch':
                 for child in fields(RetouchCfg):
-                    if child.metadata.get('ui'):
+                    if child.metadata.get('ui') and (config.CAKE_DEV or not child.metadata.get('dev_only')):
                         yield child.name, child
+        for section, cls in section_types().items():
+            for child in fields(cls):
+                if child.metadata.get('ui') and (config.CAKE_DEV or not child.metadata.get('dev_only')):
+                    yield f'{section}.{child.name}', child
 
     def _control(self, name, spec, layout, initial=None):
         md = spec.metadata
@@ -102,10 +108,13 @@ class ParamPanel:
         for name, spec in self.field_specs():
             if name not in self.controls and spec.metadata['ui'] == '风格':
                 control = self._control(name, spec, f)
-                control.valueChanged.connect(self.param_timer.start)
-                label = getattr(self, f'{name}_lbl')
-                label.setText(str(control.value()))
-                control.valueChanged.connect(lambda value, label=label: label.setText(str(value)))
+                if isinstance(control, QCheckBox):
+                    control.toggled.connect(self.param_timer.start)
+                else:
+                    control.valueChanged.connect(self.param_timer.start)
+                    label = getattr(self, f'{name}_lbl')
+                    label.setText(str(control.value()))
+                    control.valueChanged.connect(lambda value, label=label: label.setText(str(value)))
         v.addWidget(g)
 
         g = QGroupBox("人像精修")
@@ -120,6 +129,21 @@ class ParamPanel:
             if name not in self.controls and spec.metadata['ui'] == '人像精修':
                 self._control(name, spec, f)
         v.addWidget(g)
+        known_groups = {'\u98ce\u683c', '\u4eba\u50cf\u7cbe\u4fee'}
+        for group in dict.fromkeys(spec.metadata['ui'] for _, spec in self.field_specs()):
+            if group in known_groups:
+                continue
+            box = QGroupBox(group)
+            form = QFormLayout(box)
+            for name, spec in self.field_specs():
+                if spec.metadata['ui'] == group and name not in self.controls:
+                    self._control(name, spec, form)
+            v.addWidget(box)
+        for name, spec in self.field_specs():
+            if '.' in name:
+                control = self.controls[name]
+                signal = control.toggled if isinstance(control, QCheckBox) else control.valueChanged
+                signal.connect(self.param_timer.start)
         self.spots.sliderMoved.connect(lambda _: setattr(self, "spots_touched", True))
         self.eyes.sliderMoved.connect(lambda _: setattr(self, "eyes_touched", True))
         self.retouch.valueChanged.connect(self._follow_retouch)
@@ -231,7 +255,7 @@ class ParamPanel:
         self.eyes_lbl.setText(str(self.eyes.value()))
 
     def settings(self) -> dict:
-        recipe = Recipe()
+        recipe = Recipe.from_dict(self._section_settings) if hasattr(self, '_section_settings') else Recipe()
         retouch_names = {item.name for item in fields(RetouchCfg)}
         for name, _ in self.field_specs():
             control = self.controls[name]
@@ -244,7 +268,11 @@ class ParamPanel:
                 value = None
             else:
                 value = control.value() / (80 if name == 'skin_protect_scale' else 100)
-            setattr(recipe.retouch if name in retouch_names else recipe, name, value)
+            if '.' in name:
+                section, attr = name.split('.', 1)
+                setattr(recipe.sections[section], attr, value)
+            else:
+                setattr(recipe.retouch if name in retouch_names else recipe, name, value)
         return recipe.to_dict()
 
     def _send_params(self):
@@ -258,6 +286,7 @@ class ParamPanel:
         """Push a settings dict into the widgets (one engine update at the end)."""
         recipe = s if isinstance(s, Recipe) else (Recipe.from_dict(s)
                   if isinstance(s.get('retouch'), dict) else Recipe.from_legacy(s))
+        self._section_settings = recipe.to_dict()
         self._applying = True
         try:
             self.style_box.setCurrentIndex(max(0, self.style_box.findData(recipe.style)))
@@ -275,7 +304,11 @@ class ParamPanel:
                             'eyes', 'keep_moles', 'debug'}:
                     continue
                 control = self.controls[name]
-                value = getattr(recipe.retouch if hasattr(recipe.retouch, name) else recipe, name)
+                if '.' in name:
+                    section, attr = name.split('.', 1)
+                    value = getattr(recipe.sections[section], attr)
+                else:
+                    value = getattr(recipe.retouch if hasattr(recipe.retouch, name) else recipe, name)
                 if isinstance(control, QCheckBox):
                     control.setChecked(value)
                 else:

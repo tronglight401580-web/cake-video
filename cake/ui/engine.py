@@ -74,6 +74,8 @@ class PreviewEngine(QThread):
         for key, value in kw.items():
             if key in ('retouch', 'spots', 'eyes', 'keep_moles', 'debug'):
                 data['retouch'][{'retouch': 'level'}.get(key, key)] = value
+            elif key == 'demo_tint':
+                data['sections']['demo_tint']['amount'] = value
             elif key in data:
                 data[key] = value
         self.set_recipe(Recipe.from_dict(data))
@@ -173,7 +175,7 @@ class PreviewEngine(QThread):
             self._apply_params(dict(style=r.style, strength=r.strength, retouch=r.retouch.level,
                                     spots=r.retouch.spots, eyes=r.retouch.eyes,
                                     keep_moles=r.retouch.keep_moles, debug=r.retouch.debug,
-                                    skin_protect_scale=r.skin_protect_scale, demo_tint=r.demo_tint))
+                                    skin_protect_scale=r.skin_protect_scale, demo_tint=r.demo_tint.amount, sections=r.to_dict()['sections']))
             if not self.playing and self.last is not None:
                 self._render_and_emit(*self.last, reanalyze=False)
         return True
@@ -260,6 +262,8 @@ class PreviewEngine(QThread):
         for k, v in kw.items():
             setattr(self.params, k, v)
         p = self.params
+        if 'demo_tint' in kw and 'sections' not in kw and hasattr(p, 'sections'):
+            p.sections['demo_tint']['amount'] = kw['demo_tint']
         if self.renderer is None:
             return
         st = load_style(p.style)
@@ -267,7 +271,7 @@ class PreviewEngine(QThread):
         self.renderer.apply_recipe(Recipe(style=p.style, strength=p.strength,
                                           retouch=RetouchCfg(p.retouch, p.spots, p.eyes,
                                                              p.keep_moles, p.debug),
-                                          skin_protect_scale=p.skin_protect_scale, demo_tint=p.demo_tint), stamp)
+                                          skin_protect_scale=p.skin_protect_scale, sections=getattr(p, 'sections', {'demo_tint': {'amount': p.demo_tint}})), stamp)
         if (p.retouch > 0 or (self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0)) and self.analyzer is None:
             from ..face import Analyzer
             self.status.emit("正在加载精修模型（首次约 3～6 秒）…")

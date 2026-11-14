@@ -9,6 +9,7 @@ STYLE_DIR = ROOT / 'styles'
 PRESETS_FILE = Path(os.environ.get('APPDATA', Path.home())) / 'cake' / 'presets.json'
 CAKE_SEG = os.environ.get('CAKE_SEG', 'auto')
 CAKE_ANALYZER = os.environ.get('CAKE_ANALYZER', 'process')
+CAKE_DEV = os.environ.get('CAKE_DEV') == '1'
 CAKE_YUV = os.environ.get('CAKE_YUV') == '1'
 ANALYSIS_SHORT = 360
 SEG_EVERY = 2
@@ -16,6 +17,9 @@ PROCESS_WORKERS = 3
 THREAD_WORKERS = 4
 PREVIEW_SHORT = 720
 LOOKAHEAD = 6
+LANDMARK_MIN_CUTOFF = 1.0
+LANDMARK_BETA = 0.005
+REGION_EMA_ALPHA = 0.55
 
 SEGMENTATION_MODEL = MODEL_DIR / "selfie_multiclass_256x256.onnx"
 
