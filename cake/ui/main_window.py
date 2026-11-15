@@ -113,6 +113,7 @@ class MainWindow(ParamPanel, QueuePanel, QMainWindow):
 
         e = self.engine
         e.frame_ready.connect(self._on_frame)
+        e.playback_stats.connect(self._on_playback_stats)
         e.clip_loaded.connect(self._on_loaded)
         e.playing_changed.connect(self._on_playing)
         e.status.connect(self.statusBar().showMessage)
@@ -227,10 +228,26 @@ class MainWindow(ParamPanel, QueuePanel, QMainWindow):
             self.timeline.setValue(int(1000 * t / self.duration))
             self.timeline.blockSignals(False)
         self.time_label.setText(f"{_mmss(t)} / {_mmss(self.duration)}")
-        self.statusBar().showMessage(f"预览 {graded.width()}x{graded.height()} · 渲染 {ms:.0f} ms")
+        self._last_preview = (graded.width(), graded.height(), ms)
+        self._show_preview_status()
+
+    def _show_preview_status(self):
+        if not hasattr(self, '_last_preview'):
+            return
+        width, height, ms = self._last_preview
+        stats = getattr(self, '_playback_stats', (0.0, 0))
+        self.statusBar().showMessage(
+            f"预览 {width}x{height} · 渲染 {ms:.0f} ms · "
+            f"显示 {stats[0]:.1f} fps · 丢帧 {stats[1]}")
+
+    def _on_playback_stats(self, fps: float, dropped: int):
+        self._playback_stats = (fps, dropped)
+        self._show_preview_status()
 
     def _on_playing(self, playing: bool):
         self.playing = playing
+        if playing:
+            self._playback_stats = (0.0, 0)
         self.play_btn.setText("⏸ 暂停" if playing else "▶ 播放")
 
     def _toggle_play(self):
@@ -242,6 +259,7 @@ class MainWindow(ParamPanel, QueuePanel, QMainWindow):
 
     def _on_mode(self):
         self.view.mode = self.mode_box.currentData()
+        self.engine.set_compare(self.view.mode != 'effect')
         self.view.update()
 
     # ---------------------------------------------------------------- export

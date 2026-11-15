@@ -108,21 +108,30 @@ void main() {
 
 def displacement(grid, jaw, eyes):
     """CPU counterpart of FIELD, in pixels, for the area and smoothness guards."""
-    weighted = np.zeros_like(grid, dtype=np.float32)
-    total = np.zeros(grid.shape[:2], np.float32)
-    for x, y, dx, dy, radius, gate_y in jaw:
-        q = (grid - (x, y)) / radius
-        z = np.sum(q * q, axis=-1)
-        t = np.clip((grid[..., 1] - (gate_y - radius * .25)) / (radius * .5), 0, 1)
-        weight = np.maximum(1 - z, 0)**2 * t * t * (3 - 2 * t)
-        weighted += weight[..., None] * (dx, dy)
-        total += weight
-    result = -weighted / (1 + total[..., None])
-    for x, y, radius, strength in eyes:
-        diff = grid - (x, y)
-        z = np.sum(diff * diff, axis=-1) / radius**2
-        result -= diff * (strength * np.maximum(1 - z, 0)**2)[..., None] * (1., .25)
-    return result
+    shape = grid.shape[:-1]
+    points = grid.reshape(-1, 2)
+    px, py = points[None, :, 0], points[None, :, 1]
+    rx = np.zeros(len(points), np.float32)
+    ry = np.zeros(len(points), np.float32)
+    if jaw:
+        values = np.asarray(jaw, np.float32)
+        x, y, dx, dy, radius, gate_y = (values[:, i:i+1] for i in range(6))
+        vx, vy = (px - x) / radius, (py - y) / radius
+        core = np.maximum(1 - vx * vx - vy * vy, 0)
+        t = np.clip((py - (gate_y - radius * .25)) / (radius * .5), 0, 1)
+        weight = core * core * t * t * (3 - 2 * t)
+        inv_total = 1 / (1 + weight.sum(axis=0))
+        rx = -(weight * dx).sum(axis=0) * inv_total
+        ry = -(weight * dy).sum(axis=0) * inv_total
+    if eyes:
+        values = np.asarray(eyes, np.float32)
+        x, y, radius, strength = (values[:, i:i+1] for i in range(4))
+        vx, vy = px - x, py - y
+        core = np.maximum(1 - (vx * vx + vy * vy) / radius**2, 0)
+        weight = strength * core * core
+        rx -= (vx * weight).sum(axis=0)
+        ry -= (vy * weight * .25).sum(axis=0)
+    return np.stack((rx, ry), -1).reshape(*shape, 2)
 
 
 def area_range(field, step):
@@ -141,17 +150,93 @@ def guard_controls(jaw, eyes):
     extents += [(x-r, y-r, x+r, y+r) for x, y, r, _ in eyes]
     if not extents:
         return jaw, eyes
-    # A 2 px grid resolves the narrowest eye kernel and includes the envelope.
-    step = 2.
-    lo = np.min(np.array(extents)[:, :2], axis=0) - 4
-    hi = np.max(np.array(extents)[:, 2:], axis=0) + 4
-    xx, yy = np.meshgrid(np.arange(lo[0], hi[0] + step, step),
-                         np.arange(lo[1], hi[1] + step, step))
-    field = displacement(np.stack((xx, yy), -1), jaw, eyes)
+    # The fold guard depends on the extrema of a smooth, broad kernel, not on
+    # every output pixel. Sample a fixed face-local grid so 4K costs the same
+    # as 720p.
+    extent = np.asarray(extents, np.float32)
+    lo = extent[:, :2].min(axis=0) - 4
+    hi = extent[:, 2:].max(axis=0) + 4
+    step = float(max(hi - lo) / 16)
+    xx, yy = np.meshgrid(np.arange(lo[0], hi[0] + step, step, dtype=np.float32),
+                         np.arange(lo[1], hi[1] + step, step, dtype=np.float32))
+    samples = np.stack((xx, yy), -1).reshape(-1, 2)
+    jaw_array = np.asarray(jaw, np.float32).reshape(-1, 6)
+    eye_array = np.asarray(eyes, np.float32).reshape(-1, 4)
+    def coefficients(positions):
+        px, py = positions[None, :, 0], positions[None, :, 1]
+        n = len(positions)
+        a = np.zeros(n, np.float32)
+        b = np.zeros(n, np.float32)
+        c = np.zeros(n, np.float32)
+        d = np.zeros(n, np.float32)
+        if len(jaw_array):
+            x, y, dx, dy, radius, gate_y = (jaw_array[:, i:i+1] for i in range(6))
+            vx, vy = px - x, py - y
+            inv = 1 / (radius * radius)
+            core = np.maximum(1 - (vx * vx + vy * vy) * inv, 0)
+            t = np.clip((py - gate_y + radius * .25) / (radius * .5), 0, 1)
+            gate = t * t * (3 - 2 * t)
+            weight = core * core * gate
+            gx = -4 * core * vx * inv * gate
+            gy = -4 * core * vy * inv * gate + core * core * 12 * t * (1 - t) / radius
+            total = weight.sum(axis=0)
+            tx, ty = gx.sum(axis=0), gy.sum(axis=0)
+            wx, wy = (weight * dx).sum(axis=0), (weight * dy).sum(axis=0)
+            wxx, wxy = (gx * dx).sum(axis=0), (gy * dx).sum(axis=0)
+            wyx, wyy = (gx * dy).sum(axis=0), (gy * dy).sum(axis=0)
+            inv_total = 1 / (1 + total)
+            a = -wxx * inv_total + wx * tx * inv_total * inv_total
+            b = -wxy * inv_total + wx * ty * inv_total * inv_total
+            c = -wyx * inv_total + wy * tx * inv_total * inv_total
+            d = -wyy * inv_total + wy * ty * inv_total * inv_total
+        if len(eye_array):
+            x, y, radius, strength = (eye_array[:, i:i+1] for i in range(4))
+            vx, vy = px - x, py - y
+            inv = 1 / (radius * radius)
+            core = np.maximum(1 - (vx * vx + vy * vy) * inv, 0)
+            weight = strength * core * core
+            gx = -4 * strength * core * vx * inv
+            gy = -4 * strength * core * vy * inv
+            a -= (weight + vx * gx).sum(axis=0)
+            b -= (vx * gy).sum(axis=0)
+            c -= (.25 * vy * gx).sum(axis=0)
+            d -= (.25 * (weight + vy * gy)).sum(axis=0)
+        return a + d, a * d - b * c
+    linear, quadratic = coefficients(samples)
+    spacings = (step / 4, step / 16)
+    for spacing in spacings:
+        det = 1 + linear + quadratic
+        count = min(6, len(det) // 2)
+        candidates = np.r_[np.argpartition(det, count)[:count],
+                           np.argpartition(-det, count)[:count]]
+        dx, dy = np.meshgrid(np.array((-1, 0, 1), np.float32) * spacing,
+                             np.array((-1, 0, 1), np.float32) * spacing)
+        refined = (samples[candidates, None, :] + np.stack((dx, dy), -1).reshape(1, 9, 2)).reshape(-1, 2)
+        refined = lo + 2 * np.round((refined - lo) / 2)
+        l, q = coefficients(refined)
+        samples = np.concatenate((samples, refined))
+        linear = np.concatenate((linear, l))
+        quadratic = np.concatenate((quadratic, q))
+    det = 1 + linear + quadratic
+    count = min(3, len(det) // 2)
+    candidates = np.r_[np.argpartition(det, count)[:count],
+                       np.argpartition(-det, count)[:count]]
+    dx, dy = np.meshgrid(np.array((-2, 0, 2), np.float32),
+                         np.array((-2, 0, 2), np.float32))
+    local = (samples[candidates, None, :] + np.stack((dx, dy), -1).reshape(1, 9, 2)).reshape(-1, 2)
+    offsets = np.array(((-2., 0.), (2., 0.), (0., -2.), (0., 2.)), np.float32)
+    field = displacement((local[:, None, :] + offsets).reshape(-1, 1, 2), jaw, eyes).reshape(-1, 4, 2)
+    ddx = (field[:, 1] - field[:, 0]) * .25
+    ddy = (field[:, 3] - field[:, 2]) * .25
+    a, c = ddx[:, 0], ddx[:, 1]
+    b, d = ddy[:, 0], ddy[:, 1]
+    linear = np.concatenate((linear, a + d))
+    quadratic = np.concatenate((quadratic, a * d - b * c))
     low, high = 0., 1.
     for _ in range(14):
         scale = (low + high) * .5
-        minimum, maximum = area_range(field * scale, step)
+        det = 1 + linear * scale + quadratic * (scale * scale)
+        minimum, maximum = float(det.min()), float(det.max())
         if minimum >= .805 and maximum <= 1.245:
             low = scale
         else:
@@ -347,7 +432,8 @@ class Warp(Pass):
         if not jaw and not eyes:
             self.history_valid = False
             return
-        jaw, eyes = guard_controls(jaw, eyes)
+        if len(self.tracks) > 1:
+            jaw, eyes = guard_controls(jaw, eyes)
         self._setup_gpu()
         extents = [(x-r, y-r, x+r, y+r) for x, y, _, _, r, _ in jaw]
         extents += [(x-r, y-r, x+r, y+r) for x, y, r, _ in eyes]

@@ -20,7 +20,9 @@ class PreviewView(QWidget):
         self.setMouseTracking(True)
 
     def set_images(self, graded: QImage, original: QImage):
-        self.graded, self.original = graded, original
+        self.graded = graded
+        if not original.isNull():
+            self.original = original
         self.update()
 
     def _target(self) -> QRectF:

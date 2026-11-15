@@ -28,6 +28,8 @@ def main():
     ap.add_argument("clip")
     ap.add_argument("--style", default="film_warm")
     ap.add_argument("--retouch", type=float, default=0.5)
+    ap.add_argument("--slim", type=float, default=0.)
+    ap.add_argument("--eyes", type=float, default=0.)
     ap.add_argument("--seg-every", type=int, default=2)
     ap.add_argument("--workers", type=int)
     ap.add_argument("--null-encoder", action="store_true")
@@ -50,12 +52,15 @@ def main():
     out = os.path.join(tempfile.gettempdir(), "cake_bench.mp4")
     st = load_style(a.style)
     t0 = time.perf_counter()
-    s = P.grade_video(a.clip, out, st, retouch=a.retouch, log=lambda *x: None, duration=a.duration)
+    from cake.core.recipe import Recipe, RetouchCfg
+    recipe = Recipe(style=a.style, retouch=RetouchCfg(level=a.retouch),
+                    sections={'reshape': {'slim': a.slim, 'eyes': a.eyes}})
+    s = P.grade_video(a.clip, out, st, recipe=recipe, log=lambda *x: None, duration=a.duration)
     wall = time.perf_counter() - t0
     print(f"{Path(a.clip).name}: {s['frames']} frames, loop {s['fps']:.1f} fps, "
           f"wall {s['frames'] / wall:.1f} fps (incl. startup {wall - s['seconds']:.1f}s) "
           f"[seg={os.environ.get('CAKE_SEG', 'auto')} analyzer={os.environ.get('CAKE_ANALYZER', 'process')} "
-          f"seg_every={a.seg_every} null_enc={a.null_encoder}]")
+          f"seg_every={a.seg_every} null_enc={a.null_encoder} slim={a.slim} eyes={a.eyes}]")
 
 
 if __name__ == "__main__":
