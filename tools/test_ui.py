@@ -59,6 +59,33 @@ def main():
     print("after seek:", t_label)
     assert t_label.startswith("00:06"), t_label
 
+    # play to the end, then play again -> restarts from 0 s. With slimming on,
+    # playback runs at a lower preview size and the size switch at the end used
+    # to reopen the decoder there, so replay stayed at the end.
+    from cake.core.recipe import Recipe
+    saved_recipe = win.engine.recipe
+    data = saved_recipe.to_dict()
+    data['sections'].setdefault('reshape', {}).update(slim=1.0, eyes=1.0)
+    win.engine.set_recipe(Recipe.from_dict(data))
+    n0 = win.frames_seen
+    win.timeline.setValue(985)
+    win._do_seek()
+    wait(app, lambda: win.frames_seen > n0, 15, "frame after seek to end")
+    win._toggle_play()
+    wait(app, lambda: win.playing, 10, "playback started")
+    wait(app, lambda: not win.playing, 30, "playback reached the end")
+    win._toggle_play()
+    # The end-of-clip frame can arrive after the play signal, so wait for the
+    # label itself; without the fix it stays at the end and this times out.
+    wait(app, lambda: win.playing and win.time_label.text().startswith("00:00"), 15,
+         "replay from 0 s")
+    t_label = win.time_label.text()
+    win._toggle_play()
+    wait(app, lambda: not win.playing, 10, "paused")
+    print("replay after end (slim on):", t_label)
+    assert t_label.startswith("00:00"), t_label
+    win.engine.set_recipe(saved_recipe)
+
     # switch clip in the queue
     n0 = win.frames_seen
     win.queue.setCurrentRow(2)

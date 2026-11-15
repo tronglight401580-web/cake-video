@@ -116,6 +116,7 @@ class PreviewEngine(QThread):
         self.base_t = 0.0                    # clip time of internal index 0
         self.next_idx = 0
         self.eof = False
+        self.ended = False
         self.t_play0 = 0.0
         self.idx_play0 = 0
         running = True
@@ -155,6 +156,10 @@ class PreviewEngine(QThread):
         if kind == "load":
             self._load(cmd[1], cmd[2])
         elif kind == "play" and self.info:
+            if self.ended:
+                # Play after the clip finished starts over from 0 s.
+                self._open_at(0.0)
+                self.last = None
             reshape = getattr(self.params, 'sections', {}).get('reshape', {})
             slim = reshape.get('slim', 0) if isinstance(reshape, dict) else reshape.slim
             eyes = reshape.get('eyes', 0) if isinstance(reshape, dict) else reshape.eyes
@@ -283,6 +288,7 @@ class PreviewEngine(QThread):
         self.dec_thread.start()
         self.next_idx = 0
         self.eof = False
+        self.ended = False                   # playback reached the clip end
         if self.analyzer is not None:
             self.analyzer.reset(fps=float(self.info.fps))
 
@@ -323,6 +329,8 @@ class PreviewEngine(QThread):
             self.playing_changed.emit(False)
             if self._set_preview_size(PREVIEW_SHORT):
                 self._show_next()
+            # Set after the resize: it reopens the decoder, which clears the flag.
+            self.ended = True
             return
         period = 1 / float(self.info.fps)
         while self.buf:
