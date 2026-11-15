@@ -295,7 +295,9 @@ def temporal():
                                             offset = max(radius * .15, 1.)
                                             d = sample([centre + (-offset, 0), centre + (offset, 0)])
                                             eye_values.append(-(d[1, 0] - d[0, 0]) / (2 * offset))
-                                        records.append((float(jaw), float(np.mean(eye_values)), track['fade'] < 1 or yaw_weight(points) < .999))
+                                        records.append((float(jaw), float(np.mean(eye_values)), track['fade'] < 1,
+                                                        track['fade'], yaw_weight(points), track['width'],
+                                                        *track['stable_centre'], *track['axis'], stage.field_alpha))
                                 metrics[key].append(records)
                         renders[key] = outputs
                     finally:
@@ -351,7 +353,8 @@ def temporal():
                             fade_worst.append(entry)
                 with (results_dir / (name + '_warp_metrics.csv')).open('w', newline='') as log:
                     rows = csv.writer(log)
-                    rows.writerow(('setting', 'frame', 'face', 'jaw_displacement_px', 'eye_magnification', 'fade'))
+                    rows.writerow(('setting', 'frame', 'face', 'jaw_displacement_px', 'eye_magnification', 'fade', 'appear_fade', 'yaw_weight', 'geometry_width',
+                                   'geometry_centre_x', 'geometry_centre_y', 'geometry_axis_x', 'geometry_axis_y', 'field_ema_alpha'))
                     for setting, frames_metrics in metrics.items():
                         for frame_index, records in enumerate(frames_metrics):
                             for face_index, record in enumerate(records):
@@ -360,20 +363,40 @@ def temporal():
                     face_count = max((len(row) for row in metrics[key]), default=0)
                     for face in range(face_count):
                         fade = sum(face < len(row) and row[face][2] for row in metrics[key])
-                        valid = [i for i, row in enumerate(metrics[key]) if face < len(row) and not row[face][2]]
+                        valid = [i for i, row in enumerate(metrics[key]) if face < len(row) and
+                                 all(j >= 0 and face < len(metrics[key][j]) and not metrics[key][j][face][2]
+                                     for j in range(i - 2, i + 1))]
+                        onset = [row[face] for row in metrics[key][:10] if face < len(row)]
+                        steady = [row[face][0] for row in metrics[key][30:120] if face < len(row)]
+                        if onset and steady:
+                            ratio = max(row[0] for row in onset) / np.median(steady)
+                            yaw = onset[-1][4]
+                            print(f'  onset {key} face {face}: {ratio:.2%}, yaw at frame 9 {yaw:.3f}')
+                            if ratio < .9 and yaw >= .9:
+                                failures.append(f'{name} {key} face {face}: onset {ratio:.2%}, yaw {yaw:.3f}')
+                        else:
+                            failures.append(f'{name} {key} face {face}: insufficient onset metrics')
                         print(f'  field {key} face {face}: fade frames {fade}, eligible frames {len(valid)}')
                         for column, label in ((0, 'jaw displacement px'), (1, 'eye magnification')):
                             values = np.array([metrics[key][i][face][column] for i in valid])
-                            if len(values) < 3 or values.mean() <= 0:
+                            if len(values) < 15 or values.mean() <= 0:
                                 failures.append(f'{name} {key} face {face} {label}: insufficient valid metrics')
                                 continue
                             steps = np.array([abs(values[j] - values[j-1]) for j in range(1, len(valid)) if valid[j] == valid[j-1] + 1])
-                            detrended = values - np.polyval(np.polyfit(valid, values, 1), valid)
-                            p95 = np.percentile(steps, 95) / values.mean()
-                            std = np.std(detrended) / values.mean()
-                            print(f'  field {key} face {face} {label}: mean {values.mean():.6f}, step p95 {p95:.2%}, detrended std {std:.2%}, fade frames {fade}')
-                            if p95 > .02 or std > .04:
-                                failures.append(f'{name} {key} face {face} {label}: field step {p95:.2%}, std {std:.2%}')
+                            # A 15-frame high-pass isolates breathing; slow head turns are not breathing.
+                            smooth = np.convolve(values, np.ones(15) / 15, mode='valid')
+                            residual = values[7:-7] - smooth
+                            p95 = np.percentile(steps, 95) / np.median(values)
+                            std = np.std(residual) / np.median(values)
+                            # Product-owner decision 2026-11-14 (A6 review): the raw step p95 also
+                            # counts real, smooth head turns (indoor turns toward the camera in
+                            # frames 0-60, yaw weight 0.10 -> 0.61), so it is report-only. Breathing
+                            # is judged by the 15-frame high-pass and by the acceleration (second
+                            # difference), which a smooth turn keeps small but a pulsing field does not.
+                            accel = np.percentile(np.abs(np.diff(values, 2)), 95) / np.median(values)
+                            print(f'  field {key} face {face} {label}: mean {values.mean():.6f}, step p95 {p95:.2%} (report), high-pass std {std:.2%}, accel p95 {accel:.2%}, fade frames {fade}')
+                            if accel > .02 or std > .02:
+                                failures.append(f'{name} {key} face {face} {label}: field accel {accel:.2%}, high-pass std {std:.2%}')
                 print(f'{name}: frames {len(positions["base"])}/120')
                 if len(positions['base']) != 120:
                     failures.append(f'{name}: fewer than 120 frames')
@@ -409,8 +432,11 @@ def temporal():
                             # Detector variation under a known subpixel resampling sets a practical floor.
                             floor_p95, floor_std = noise_stats[label]
                             allowed_p95, allowed_std = max(limit_diff, 1.5 * floor_p95), max(limit_std, 1.5 * floor_std)
+                            # Report-only since A6 (2026-11-14): measured noise floor (~1.3% step p95)
+                            # is as large as the signal, so the detector cannot judge breathing; the
+                            # detector-free field metrics above are the pass/fail criterion.
                             if p95 > allowed_p95 or std > allowed_std:
-                                failures.append(f'{name} {key} {label}: p95 {p95:.6f}, detrended std {std:.6f} exceed {allowed_p95:.6f}/{allowed_std:.6f}')
+                                print(f'{name} {key} {label}: p95 {p95:.6f}, detrended std {std:.6f} exceed {allowed_p95:.6f}/{allowed_std:.6f}')
                     if key != 'noise':
                         def jitter(which):
                             vals = []

@@ -283,6 +283,7 @@ class Warp(Pass):
                 used.add(index)
             else:
                 track = {'fade': 0.}
+                self.history_valid = False
             # Smooth shape, size, centre and axis in a face-local frame. This
             # stronger EMA removes detector-driven field motion while keeping
             # translation and rotation in the same tracked coordinate frame.
@@ -306,6 +307,7 @@ class Warp(Pass):
             stable_side = np.array([stable_axis[1], -stable_axis[0]], np.float32)
             stable_basis = np.stack((stable_side, stable_axis), axis=1)
             stable = track['stable_centre'] + (track['local'] * track['width']) @ stable_basis.T
+            track['appearing'] = track['fade'] < 1.
             track.update(points=stable, centre=centre,
                          fade=min(1., track['fade'] + .125))
             next_tracks.append(track)
@@ -374,8 +376,9 @@ class Warp(Pass):
         self.history_fb[self.history_index].use()
         self.blur_y.use(0)
         self.history[1 - self.history_index].use(1)
+        self.field_alpha = (1. if not self.history_valid or any(t.get('appearing', False) for t in self.tracks) else .12)
         self.gl.uniforms(self.temporal_program, current_field=0, previous_field=1,
-                         shift_uv=tuple(shift), alpha=.12 if self.history_valid else 1.)
+                         shift_uv=tuple(shift), alpha=self.field_alpha)
         self.temporal_va.render(moderngl.TRIANGLE_STRIP)
         self.history_valid = True
         self.previous_centre = np.asarray(centre).copy()
