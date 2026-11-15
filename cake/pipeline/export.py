@@ -66,7 +66,7 @@ def grade_video(inp: str, out: str, style: Style | None = None, strength: float 
     bus.publish('status', status='started', input=inp, output=out)
     info = _deps().probe(inp)
     own_analyzer = False
-    needs_analysis = retouch > 0 or bool(style.skin_lut and style.skin_protect > 0)
+    needs_analysis = retouch > 0 or bool(style.skin_lut and style.skin_protect > 0) or bool(recipe.reshape.slim or recipe.reshape.eyes)
     if needs_analysis and analyzer is None:
         from ..face import Analyzer
         analyzer = Analyzer(fps=float(info.fps))     # start loading models first: overlaps
