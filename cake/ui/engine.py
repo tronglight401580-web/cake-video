@@ -255,7 +255,8 @@ class PreviewEngine(QThread):
 
     # ---------------------------------------------------------------- rendering
     def _retouch_on(self) -> bool:
-        return self.analyzer is not None and (self.params.retouch > 0 or bool(self.renderer and self.renderer.style and self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0))
+        reshape = getattr(self.params, 'sections', {}).get('reshape', {})
+        return self.analyzer is not None and (self.params.retouch > 0 or bool(self.renderer and self.renderer.style and self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0) or bool(reshape.get('slim') or reshape.get('eyes')))
 
     def _apply_params(self, kw: dict, force_style: bool = False):
         old_style = self.params.style
@@ -272,7 +273,8 @@ class PreviewEngine(QThread):
                                           retouch=RetouchCfg(p.retouch, p.spots, p.eyes,
                                                              p.keep_moles, p.debug),
                                           skin_protect_scale=p.skin_protect_scale, sections=getattr(p, 'sections', {'demo_tint': {'amount': p.demo_tint}})), stamp)
-        if (p.retouch > 0 or (self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0)) and self.analyzer is None:
+        reshape = getattr(p, 'sections', {}).get('reshape', {})
+        if (p.retouch > 0 or (self.renderer.style.skin_lut and self.renderer.style.skin_protect > 0) or reshape.get('slim') or reshape.get('eyes')) and self.analyzer is None:
             from ..face import Analyzer
             self.status.emit("正在加载精修模型（首次约 3～6 秒）…")
             self.analyzer = Analyzer(fps=float(self.info.fps))

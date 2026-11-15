@@ -33,7 +33,7 @@ class ExportWorker(QThread):
         ok = 0
         t0 = time.perf_counter()
         try:
-            if any(s.retouch.level > 0 or (load_style(s.style).skin_lut and load_style(s.style).skin_protect > 0) for _, _, s in self.jobs):
+            if any(s.retouch.level > 0 or s.reshape.slim > 0 or s.reshape.eyes > 0 or (load_style(s.style).skin_lut and load_style(s.style).skin_protect > 0) for _, _, s in self.jobs):
                 from ..face import Analyzer
                 analyzer = Analyzer()             # one warm pool for the whole batch
             for row, path, s in self.jobs:
