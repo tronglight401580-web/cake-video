@@ -97,6 +97,10 @@ class ParamPanel:
         self.ref_button = QPushButton("\u53c2\u8003\u56fe\u8ffd\u8272")
         self.ref_button.clicked.connect(self._choose_reference)
         f.addRow(self.ref_button)
+        self.codex_button = QPushButton("Codex AI 追色")
+        self.codex_button.setToolTip("用提示词让 Codex 给当前画面调色，再自动拟合成追色风格")
+        self.codex_button.clicked.connect(self._open_codex)
+        f.addRow(self.codex_button)
         specs = dict(self.field_specs())
         self.skin_protect = self._control('skin_protect_scale', specs['skin_protect_scale'], f, 1.0)
         self.skin_lbl = self.skin_protect_scale_lbl
@@ -224,6 +228,17 @@ class ParamPanel:
         self.ref_worker.failed.connect(lambda err: self.statusBar().showMessage("\u751f\u6210\u5931\u8d25: " + err))
         self.ref_worker.finished.connect(lambda: self.ref_button.setEnabled(True))
         self.ref_worker.start()
+
+    def _open_codex(self):
+        item = self.queue.currentItem()
+        if item is None:
+            self.statusBar().showMessage("请先选择视频")
+            return
+        from .codex_dialog import CodexDialog
+        t = self.timeline.value() / 1000 * self.duration if self.duration > 0 else 0.0
+        self.codex_dlg = CodexDialog(self, item.data(ROLE_PATH), t)
+        self.codex_dlg.style_ready.connect(self._reference_ready)
+        self.codex_dlg.show()
 
     def _reference_ready(self, name, title):
         idx = self.style_box.findData(name)

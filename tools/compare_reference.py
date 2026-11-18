@@ -11,7 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def read_rgb(path):
-    a = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    # cv2.imread cannot open non-ASCII paths on Windows; decode from bytes instead.
+    try:
+        a = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    except OSError:
+        a = None
     if a is None:
         raise FileNotFoundError(path)
     return cv2.cvtColor(a, cv2.COLOR_BGR2RGB)

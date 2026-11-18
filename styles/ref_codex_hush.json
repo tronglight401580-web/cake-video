@@ -1,0 +1,8 @@
+{
+  "title": "追色·codex_hush",
+  "lut": "ref_codex_hush.cube",
+  "skin_lut": "ref_codex_hush_skin.cube",
+  "skin_protect": 1.0,
+  "comment": "Paired-frame colour fit (mean dE76 2.85)",
+  "reference": "C:\\Users\\Admin\\.codex\\generated_images\\01a1ed58-33e5-74e2-9c17-ec197994ebee\\exec-d5931b23-f390-4235-b238-6546035abde6.png"
+}

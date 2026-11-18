@@ -81,6 +81,15 @@ def main(argv=None) -> int:
     rs.add_argument("--skin-follow", type=float, default=.2)
     rs.add_argument("--method", choices=("grade", "mkl"), default="grade")
 
+    cx = sub.add_parser("codex-ref", help="Codex 追色：让 Codex 按提示词给一帧调色，再拟合成 LUT 风格")
+    cx.add_argument("clip")
+    cx.add_argument("--t", type=float, default=1.0, help="截帧时间（秒）")
+    cx.add_argument("--prompt", default="", help="调色提示词；留空 = 让 AI 根据画面决定")
+    cx.add_argument("--suggest", action="store_true", help="只让 Codex 根据画面写提示词并打印，不生图")
+    cx.add_argument("--graded", help="已有的同一帧调色图（跳过 Codex，直接配对拟合）")
+    cx.add_argument("--name")
+    cx.add_argument("--skin-follow", type=float, default=.2)
+
     sub.add_parser("styles", help="列出风格")
     p = sub.add_parser("probe", help="查看视频参数")
     p.add_argument("input")
@@ -92,6 +101,8 @@ def main(argv=None) -> int:
         from .refcolor import build_reference_style
         print(build_reference_style(a.reference, a.clips, a.name, a.skin_follow, method=a.method, per_shot=a.per_shot).name)
         return 0
+    if a.cmd == "codex-ref":
+        return _codex_ref(a)
     if a.cmd == "build-luts":
         from .looks import build_luts
         for path in build_luts(LUT_DIR):
@@ -132,6 +143,24 @@ def main(argv=None) -> int:
                             retouch=a.retouch, recipe=recipe))
         return 0
     return 1
+
+
+def _codex_ref(a) -> int:
+    import tempfile
+    from .color.codex_ref import codex_reference_style, grab_frame, suggest_prompt
+    log = lambda msg: print(msg, flush=True)
+    if a.suggest:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = grab_frame(a.clip, a.t, Path(tmp) / "frame.png")
+            print(suggest_prompt(frame, a.prompt, on_event=log))
+        return 0
+    st, res, fit = codex_reference_style(a.clip, a.t, a.prompt, a.name, a.skin_follow,
+                                         graded=a.graded, on_event=log)
+    print(f"风格 {st.name}  拟合误差 dE76={fit:.2f}")
+    print(f"调色图 {res.graded}")
+    if res.prompt:
+        print(f"提示词 {res.prompt}")
+    return 0
 
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi"}

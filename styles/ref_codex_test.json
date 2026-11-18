@@ -1,0 +1,8 @@
+{
+  "title": "追色·codex_test",
+  "lut": "ref_codex_test.cube",
+  "skin_lut": "ref_codex_test_skin.cube",
+  "skin_protect": 1.0,
+  "comment": "Paired-frame colour fit (mean dE76 8.00)",
+  "reference": "C:/Users/Admin/AppData/Local/Temp/claude/7fbf907e92344bea/3bc8c4be-e9a6-47ac-af30-3ff3dc5e7072/scratchpad/cx/graded.png"
+}

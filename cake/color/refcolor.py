@@ -232,3 +232,145 @@ def build_reference_style(ref_image: str, clips: list[str], name: str | None = N
             data['shots'].append(dict(start=start, end=end, lut=lut_name, skin_lut=skin_name))
     (STYLE_DIR / (stem+'.json')).write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
     return load_style(stem)
+
+
+# ---------------------------------------------------------------------------
+# Paired fit: the reference is the SAME frame re-graded (e.g. by an image model),
+# so every pixel is a (source colour -> target colour) sample. We regress a 3D LUT
+# directly instead of matching statistics, which reproduces the grade far more
+# faithfully than the conservative scene-to-scene `grade` method.
+
+PAIRED_SHORT = 480   # working resolution (short side) for paired fitting
+
+
+def apply_lut(lut, rgb):
+    """Trilinear lookup. lut (n,n,n,3) indexed [b,g,r]; rgb (...,3) float in [0,1]."""
+    n = lut.shape[0]
+    c = np.clip(np.asarray(rgb, np.float64), 0, 1) * (n - 1)
+    i0 = np.minimum(np.floor(c).astype(int), n - 2)
+    f = c - i0
+    out = np.zeros(c.shape, np.float64)
+    for db in (0, 1):
+        for dg in (0, 1):
+            for dr in (0, 1):
+                w = ((f[..., 2] if db else 1 - f[..., 2]) * (f[..., 1] if dg else 1 - f[..., 1])
+                     * (f[..., 0] if dr else 1 - f[..., 0]))
+                out += w[..., None] * lut[i0[..., 2] + db, i0[..., 1] + dg, i0[..., 0] + dr]
+    return out
+
+
+def _blur3(a, sigma):
+    """Separable Gaussian over the three grid axes of a (n,n,n,...) array (zero padded)."""
+    n = a.shape[0]
+    x = np.arange(n)
+    k = np.exp(-(x[:, None] - x[None, :]) ** 2 / (2 * sigma * sigma))
+    for axis in range(3):
+        a = np.moveaxis(np.tensordot(k, np.moveaxis(a, axis, 0), axes=(1, 0)), 0, axis)
+    return a
+
+
+def align_pair(src, tgt):
+    """Resize `tgt` to `src` and undo small shifts / scales an image model may introduce.
+    ECC runs on histogram-equalised grey so the colour grade itself does not bias it.
+    Returns (aligned uint8 RGB, ok)."""
+    h, w = src.shape[:2]
+    tgt = cv2.resize(tgt, (w, h), interpolation=cv2.INTER_AREA)
+    g1 = cv2.equalizeHist(cv2.cvtColor(src, cv2.COLOR_RGB2GRAY)).astype(np.float32) / 255
+    g2 = cv2.equalizeHist(cv2.cvtColor(tgt, cv2.COLOR_RGB2GRAY)).astype(np.float32) / 255
+    warp = np.eye(2, 3, dtype=np.float32)
+    try:
+        _, warp = cv2.findTransformECC(g1, g2, warp, cv2.MOTION_AFFINE,
+                                       (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-5), None, 5)
+    except cv2.error:
+        return tgt, False
+    if np.abs(warp[:, :2] - np.eye(2)).max() > .06 or np.abs(warp[:, 2]).max() > .06 * max(w, h):
+        return tgt, False   # implausible warp: content changed too much, keep the plain resize
+    return cv2.warpAffine(tgt, warp, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                          borderMode=cv2.BORDER_REPLICATE), True
+
+
+def fit_paired_lut(src, tgt, weight=None, n=33, sigma=1.2, confidence=5.0):
+    """Regress a smooth 3D LUT from paired colours.
+
+    src, tgt: (N,3) floats in [0,1]. An affine RGB fit (ridge toward identity) is the prior;
+    the per-node residual is splatted trilinearly, Gaussian-blurred in grid space and shrunk
+    toward the prior where fewer than ~`confidence` samples support a node, so colours the
+    frame never shows follow the global trend instead of extrapolating."""
+    src = np.asarray(src, np.float64)
+    tgt = np.asarray(tgt, np.float64)
+    w = np.ones(len(src)) if weight is None else np.asarray(weight, np.float64)
+    x = np.c_[src, np.ones(len(src))]
+    lam = 1e-3 * w.sum()
+    eye = np.r_[np.eye(3), np.zeros((1, 3))]
+    m = np.linalg.solve((x * w[:, None]).T @ x + lam * np.eye(4), (x * w[:, None]).T @ tgt + lam * eye)
+    grid = identity(n)
+    prior = grid + np.clip(np.c_[grid.reshape(-1, 3), np.ones(n ** 3)] @ m - grid.reshape(-1, 3),
+                           -.3, .3).reshape(grid.shape)
+    resid = tgt - (src + np.clip(x @ m - src, -.3, .3))
+    c = np.clip(src, 0, 1) * (n - 1)
+    i0 = np.minimum(np.floor(c).astype(int), n - 2)
+    f = c - i0
+    acc_w = np.zeros(n ** 3)
+    acc_d = np.zeros((n ** 3, 3))
+    for db in (0, 1):
+        for dg in (0, 1):
+            for dr in (0, 1):
+                tw = w * ((f[:, 2] if db else 1 - f[:, 2]) * (f[:, 1] if dg else 1 - f[:, 1])
+                          * (f[:, 0] if dr else 1 - f[:, 0]))
+                idx = ((i0[:, 2] + db) * n + i0[:, 1] + dg) * n + i0[:, 0] + dr
+                acc_w += np.bincount(idx, tw, n ** 3)
+                for ch in range(3):
+                    acc_d[:, ch] += np.bincount(idx, tw * resid[:, ch], n ** 3)
+    bw = _blur3(acc_w.reshape(n, n, n), sigma)
+    bd = _blur3(acc_d.reshape(n, n, n, 3), sigma)
+    return np.clip(prior + bd / (bw + confidence)[..., None], 0, 1)
+
+
+def build_paired_style(src_image, graded_image, name: str | None = None,
+                       skin_follow: float = .2, reference: str | None = None):
+    """Fit a style from a frame and the same frame re-graded (Codex / any photo editor).
+
+    src_image / graded_image: paths or RGB uint8 arrays. Returns (Style, fit_de76) where
+    fit_de76 is the mean CIE76 distance between LUT(frame) and the graded frame."""
+    if not 0 <= skin_follow <= 1:
+        raise ValueError('skin_follow must be in [0,1]')
+
+    def load(img):
+        if isinstance(img, np.ndarray):
+            return img[..., :3].astype(np.uint8)
+        with Image.open(img) as im:
+            return np.asarray(ImageOps.exif_transpose(im).convert('RGB'))
+
+    src, tgt = load(src_image), load(graded_image)
+    h, w = src.shape[:2]
+    k = min(1.0, PAIRED_SHORT / min(h, w))
+    src = cv2.resize(src, (max(2, round(w * k)), max(2, round(h * k))), interpolation=cv2.INTER_AREA)
+    sa, ta = src.shape, tgt.shape
+    if abs(sa[1] / sa[0] - ta[1] / ta[0]) > .04 * sa[1] / sa[0]:
+        raise ValueError(f'graded image aspect {ta[1]}x{ta[0]} does not match the frame '
+                         f'{sa[1]}x{sa[0]}: the model must not crop or change the framing')
+    tgt, _ = align_pair(src, tgt)
+    # Blur both slightly: residual misregistration and generator texture average out.
+    s = cv2.GaussianBlur(src, (0, 0), 1.2).reshape(-1, 3) / 255.
+    t = cv2.GaussianBlur(tgt, (0, 0), 1.2).reshape(-1, 3) / 255.
+    grey = cv2.cvtColor(src, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255
+    grad = np.hypot(cv2.Sobel(grey, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(grey, cv2.CV_32F, 0, 1, ksize=3))
+    weight = 1 / (1 + (grad.reshape(-1) / .15) ** 2)   # edges are where misalignment hurts
+    lut = fit_paired_lut(s, t, weight)
+    fit = float(np.linalg.norm(rgb_to_lab(apply_lut(lut, s)) - rgb_to_lab(t), axis=-1).mean())
+    grid = identity(33)
+    lab, global_lab = rgb_to_lab(grid), rgb_to_lab(lut)
+    skin_lab = lab + (global_lab - lab) * np.array([.7, skin_follow, skin_follow])
+    skin_rgb = np.clip(protect_skin(grid, np.clip(soft_clip(lab_to_rgb(skin_lab)), 0, 1), 1), 0, 1)
+    ref_path = reference or ('' if isinstance(graded_image, np.ndarray) else str(graded_image))
+    slug = re.sub(r'[^a-z0-9_]+', '_', (name or Path(ref_path or 'codex').stem).lower()).strip('_')
+    slug = slug or 'ref_' + datetime.now().strftime('%Y%m%d_%H%M%S')
+    stem = 'ref_' + slug
+    LUT_DIR.mkdir(exist_ok=True); STYLE_DIR.mkdir(exist_ok=True)
+    write_cube(LUT_DIR / (stem + '.cube'), lut)
+    write_cube(LUT_DIR / (stem + '_skin.cube'), skin_rgb)
+    data = {'title': '追色·' + slug, 'lut': stem + '.cube', 'skin_lut': stem + '_skin.cube',
+            'skin_protect': 1.0, 'comment': f'Paired-frame colour fit (mean dE76 {fit:.2f})',
+            'reference': ref_path}
+    (STYLE_DIR / (stem + '.json')).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return load_style(stem), fit
